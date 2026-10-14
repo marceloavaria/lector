@@ -8,19 +8,17 @@ import * as ort from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/o
 ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
 if (!self.crossOriginIsolated) ort.env.wasm.numThreads = 1;
 
+const HF = 'https://huggingface.co';
+const V3 = `${HF}/supertone-oss-archive/supertonic-3/resolve/aafc6e32416a594460b32413efc49d7fe4ce6d46`;
+const V2 = `${HF}/supertone-oss-archive/supertonic-2/resolve/7edbcd0bba8cd579100a353a9e0b2b49cad7c875`;
+// Supertonic 3 cuantizado a int8 por el autor de sherpa-onnx: mismos pesos, ~1/3 del tamaño.
+const V3_INT8 = `${HF}/csukuangfj2/sherpa-onnx-supertonic-3-tts-int8-2026-05-11/resolve/cca5a0e6c96e1d2c720986bf7e75fcc81dee3ae4`;
+
+// `base` aporta configuración, índice de caracteres y voces; `onnx` los cuatro modelos.
 export const MODELOS = {
-  v3: {
-    nombre: 'Supertonic 3',
-    repo: 'supertone-oss-archive/supertonic-3',
-    rev: 'aafc6e32416a594460b32413efc49d7fe4ce6d46',
-    mb: 398,
-  },
-  v2: {
-    nombre: 'Supertonic 2',
-    repo: 'supertone-oss-archive/supertonic-2',
-    rev: '7edbcd0bba8cd579100a353a9e0b2b49cad7c875',
-    mb: 263,
-  },
+  v3q: { nombre: 'Supertonic 3 liviano', mb: 145, base: V3, onnx: (n) => `${V3_INT8}/${n}.int8.onnx` },
+  v3: { nombre: 'Supertonic 3', mb: 398, base: V3, onnx: (n) => `${V3}/onnx/${n}.onnx` },
+  v2: { nombre: 'Supertonic 2', mb: 263, base: V2, onnx: (n) => `${V2}/onnx/${n}.onnx` },
 };
 
 export const VOCES = [
@@ -28,12 +26,9 @@ export const VOCES = [
   ['M1', 'Hombre 1'], ['M2', 'Hombre 2'], ['M3', 'Hombre 3'], ['M4', 'Hombre 4'], ['M5', 'Hombre 5'],
 ];
 
-const ARCHIVOS_ONNX = ['duration_predictor', 'text_encoder', 'vector_estimator', 'vocoder'];
+// El más grande primero: se carga cuando la memoria todavía está vacía.
+const ARCHIVOS_ONNX = ['vector_estimator', 'vocoder', 'text_encoder', 'duration_predictor'];
 const CACHE = 'lector-modelos-v1';
-
-function urlArchivo(modelo, ruta) {
-  return `https://huggingface.co/${modelo.repo}/resolve/${modelo.rev}/${ruta}`;
-}
 
 // Descarga con avance y la guarda en el teléfono (Cache Storage) para no repetirla.
 // El archivo se escribe al caché en streaming para no tener dos copias en memoria.
@@ -77,7 +72,7 @@ export async function estaDescargado(modeloId) {
     const cache = await caches.open(CACHE);
     const modelo = MODELOS[modeloId];
     for (const nombre of ARCHIVOS_ONNX) {
-      if (!(await cache.match(urlArchivo(modelo, `onnx/${nombre}.onnx`)))) return false;
+      if (!(await cache.match(modelo.onnx(nombre)))) return false;
     }
     return true;
   } catch {
@@ -168,18 +163,22 @@ export class Supertonic {
       alAvanzar?.({ fase: desdeCache ? 'leyendo' : 'descargando', bytes, totalBytes });
     };
 
-    const cfg = JSON.parse(new TextDecoder().decode(await descargar(urlArchivo(modelo, 'onnx/tts.json'))));
-    const indexer = JSON.parse(new TextDecoder().decode(await descargar(urlArchivo(modelo, 'onnx/unicode_indexer.json'))));
+    const cfg = JSON.parse(new TextDecoder().decode(await descargar(`${modelo.base}/onnx/tts.json`)));
+    const indexer = JSON.parse(new TextDecoder().decode(await descargar(`${modelo.base}/onnx/unicode_indexer.json`)));
 
     const intentar = async (proveedor) => {
       const sesiones = {};
       for (const nombre of ARCHIVOS_ONNX) {
-        const buf = await descargar(urlArchivo(modelo, `onnx/${nombre}.onnx`), avance);
+        let buf = await descargar(modelo.onnx(nombre), avance);
         alAvanzar?.({ fase: 'preparando', bytes, totalBytes, archivo: nombre });
         sesiones[nombre] = await ort.InferenceSession.create(new Uint8Array(buf), {
           executionProviders: [proveedor],
           graphOptimizationLevel: 'all',
+          // Sin reservas de memoria por adelantado: en el iPhone el límite es estricto.
+          enableCpuMemArena: false,
+          enableMemPattern: false,
         });
+        buf = null;
       }
       return sesiones;
     };
@@ -213,7 +212,7 @@ export class Supertonic {
   async estilo(codigo) {
     if (this.estilos.has(codigo)) return this.estilos.get(codigo);
     const modelo = MODELOS[this.modeloId];
-    const json = JSON.parse(new TextDecoder().decode(await descargar(urlArchivo(modelo, `voice_styles/${codigo}.json`))));
+    const json = JSON.parse(new TextDecoder().decode(await descargar(`${modelo.base}/voice_styles/${codigo}.json`)));
     const tensor = (x) => new ort.Tensor('float32', Float32Array.from(x.data.flat(Infinity)), x.dims);
     const estilo = { ttl: tensor(json.style_ttl), dp: tensor(json.style_dp) };
     this.estilos.set(codigo, estilo);

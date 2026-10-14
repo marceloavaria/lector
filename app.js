@@ -1,4 +1,4 @@
-import { MUESTRAS, TEXTO_LARGO } from './textos.js';
+import { MUESTRAS, TEXTO_LARGO } from './textos.js?v=2';
 
 const $ = (sel) => document.querySelector(sel);
 const coma = (x, d = 1) => x.toFixed(d).replace('.', ',');
@@ -69,15 +69,44 @@ async function revisarDescarga() {
     : `${st.MODELOS[id].nombre} pesa ${st.MODELOS[id].mb} MB. Usa Wi-Fi.`;
 }
 
+// Si Safari cierra la página por memoria mientras prepara la voz, esta marca queda
+// guardada y al volver se propone una opción más liviana.
+const MARCA = 'lector:preparando';
+const leerMarca = () => { try { return JSON.parse(localStorage.getItem(MARCA)); } catch { return null; } };
+const ponerMarca = (v) => { try { v ? localStorage.setItem(MARCA, JSON.stringify(v)) : localStorage.removeItem(MARCA); } catch { /* sin almacenamiento */ } };
+
+function revisarCaidaAnterior() {
+  const previa = leerMarca();
+  if (!previa) return;
+  ponerMarca(null);
+  const nombre = st?.MODELOS[previa.modelo]?.nombre || previa.modelo;
+  const proc = previa.backend === 'cpu' ? 'solo procesador' : 'automático';
+  let consejo;
+  if (previa.modelo !== 'v3q') {
+    $('#modelo').value = 'v3q';
+    consejo = 'Dejé elegida la versión liviana.';
+  } else if (previa.backend !== 'cpu') {
+    $('#backend').value = 'cpu';
+    consejo = 'Dejé elegido "Solo procesador", que usa menos memoria.';
+  } else {
+    consejo = 'Ya estaba en la opción más liviana: avísame en el chat.';
+  }
+  const caja = $('#aviso');
+  caja.textContent = `La última vez la página se cerró mientras preparaba ${nombre} (${proc}), probablemente por falta de memoria. ${consejo} Vuelve a tocar "Preparar voz".`;
+  caja.hidden = false;
+}
+
 async function prepararVoz() {
   const btn = $('#btn-descargar');
   btn.disabled = true;
   $('#barra').hidden = false;
+  $('#aviso').hidden = true;
   try {
     const id = $('#modelo').value;
     motor = null;
     habilitarPasos(false);
     const t0 = Date.now();
+    ponerMarca({ modelo: id, backend: $('#backend').value });
     motor = await st.Supertonic.cargar(id, {
       backend: $('#backend').value,
       alAvanzar: ({ fase, bytes, totalBytes, archivo }) => {
@@ -89,6 +118,7 @@ async function prepararVoz() {
     });
     $('#estado-modelo').textContent = 'Calentando el motor…';
     await motor.sintetizar('Hola.', 'es', 'F1', { pasos: 2 });
+    ponerMarca(null);
     try { await navigator.storage?.persist?.(); } catch { /* opcional */ }
     const nombre = st.MODELOS[id].nombre;
     const backend = motor.backend === 'webgpu' ? 'WebGPU (tarjeta gráfica)' : 'WASM (procesador)';
@@ -96,6 +126,7 @@ async function prepararVoz() {
     $('#barra').value = 100;
     habilitarPasos(true);
   } catch (e) {
+    ponerMarca(null);
     mostrarError(e);
     $('#estado-modelo').textContent = 'No se pudo preparar la voz. Revisa el error abajo.';
   } finally {
@@ -564,7 +595,7 @@ async function iniciar() {
   speechSynthesis.addEventListener?.('voiceschanged', llenarVocesSistema);
 
   try {
-    st = await import('./supertonic.js');
+    st = await import('./supertonic.js?v=2');
     const sel = $('#voz');
     for (const [codigo, nombre] of st.VOCES) {
       const op = document.createElement('option');
@@ -573,6 +604,7 @@ async function iniciar() {
       sel.append(op);
     }
     $('#btn-descargar').disabled = false;
+    revisarCaidaAnterior();
     await revisarDescarga();
   } catch (e) {
     mostrarError(e);
