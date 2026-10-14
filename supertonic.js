@@ -209,6 +209,15 @@ export class Supertonic {
     this.estilos = new Map();
   }
 
+  // Suelta la memoria del modelo (también la de la tarjeta gráfica) antes de cargar otro.
+  async liberar() {
+    for (const sesion of Object.values(this.s)) {
+      try { await sesion.release(); } catch { /* ya liberada */ }
+    }
+    this.s = {};
+    this.estilos.clear();
+  }
+
   async estilo(codigo) {
     if (this.estilos.has(codigo)) return this.estilos.get(codigo);
     const modelo = MODELOS[this.modeloId];

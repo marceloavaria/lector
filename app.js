@@ -1,4 +1,4 @@
-import { MUESTRAS, TEXTO_LARGO } from './textos.js?v=2';
+import { MUESTRAS, TEXTO_LARGO } from './textos.js?v=3';
 
 const $ = (sel) => document.querySelector(sel);
 const coma = (x, d = 1) => x.toFixed(d).replace('.', ',');
@@ -103,6 +103,8 @@ async function prepararVoz() {
   $('#aviso').hidden = true;
   try {
     const id = $('#modelo').value;
+    if (prueba?.activa && prueba.tipo === 'supertonic') prueba.terminar('cambiaste de voz');
+    if (motor) await motor.liberar();
     motor = null;
     habilitarPasos(false);
     const t0 = Date.now();
@@ -141,7 +143,9 @@ function habilitarPasos(si) {
 
 async function borrarDescargas() {
   if (!confirm('¿Borrar las voces descargadas de este dispositivo? Habrá que descargarlas de nuevo para usarlas.')) return;
+  if (prueba?.activa && prueba.tipo === 'supertonic') prueba.terminar('borraste las voces');
   await st.borrarDescargas();
+  if (motor) await motor.liberar();
   motor = null;
   habilitarPasos(false);
   $('#barra').hidden = true;
@@ -595,7 +599,7 @@ async function iniciar() {
   speechSynthesis.addEventListener?.('voiceschanged', llenarVocesSistema);
 
   try {
-    st = await import('./supertonic.js?v=2');
+    st = await import('./supertonic.js?v=3');
     const sel = $('#voz');
     for (const [codigo, nombre] of st.VOCES) {
       const op = document.createElement('option');
