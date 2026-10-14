@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Lector · Prueba de voces</title>
+  <meta name="description" content="Prueba de voces generadas en el teléfono, en español e inglés.">
+  <meta name="theme-color" content="#1f3a5f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Lector">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="icon" href="icon-192.png">
+  <style>
+    :root {
+      --fondo: #f6f5f2;
+      --tarjeta: #ffffff;
+      --texto: #1d1d1f;
+      --suave: #6e6e73;
+      --borde: #e3e1dc;
+      --acento: #1f5fae;
+      --acento-texto: #ffffff;
+      --ok: #1e7a46;
+      --error: #b3261e;
+      --error-fondo: #fdecea;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fondo: #111214;
+        --tarjeta: #1c1d20;
+        --texto: #f2f2f4;
+        --suave: #a1a1a8;
+        --borde: #2e3035;
+        --acento: #5b9cf0;
+        --acento-texto: #0b1220;
+        --ok: #5cc98a;
+        --error: #ff8a80;
+        --error-fondo: #3a1a18;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--fondo);
+      color: var(--texto);
+      font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      -webkit-text-size-adjust: 100%;
+    }
+    main {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: max(16px, env(safe-area-inset-top)) 16px calc(32px + env(safe-area-inset-bottom));
+    }
+    h1 { font-size: 1.6rem; margin: 8px 0 4px; }
+    h2 { font-size: 1.15rem; margin: 0 0 8px; }
+    p { margin: 0 0 12px; }
+    .bajada { color: var(--suave); margin-bottom: 20px; }
+    section {
+      background: var(--tarjeta);
+      border: 1px solid var(--borde);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .paso { color: var(--acento); font-weight: 600; font-size: .85rem; text-transform: uppercase; letter-spacing: .04em; }
+    ul.datos { list-style: none; padding: 0; margin: 0; }
+    ul.datos li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--borde); }
+    ul.datos li:last-child { border-bottom: 0; }
+    ul.datos span { color: var(--suave); }
+    ul.datos strong { text-align: right; font-weight: 500; }
+    label { display: block; font-size: .9rem; color: var(--suave); margin: 10px 0 4px; }
+    select, textarea {
+      width: 100%;
+      font: inherit;
+      color: var(--texto);
+      background: var(--fondo);
+      border: 1px solid var(--borde);
+      border-radius: 10px;
+      padding: 10px;
+    }
+    textarea { min-height: 110px; resize: vertical; }
+    .fila { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    button {
+      display: block;
+      width: 100%;
+      margin-top: 12px;
+      padding: 14px;
+      font: inherit;
+      font-weight: 600;
+      color: var(--acento-texto);
+      background: var(--acento);
+      border: 0;
+      border-radius: 12px;
+      cursor: pointer;
+    }
+    button.secundario { background: transparent; color: var(--acento); border: 1px solid var(--borde); }
+    button:disabled { opacity: .45; cursor: default; }
+    progress { width: 100%; height: 10px; margin-top: 12px; }
+    audio { width: 100%; margin-top: 12px; }
+    .estado { color: var(--suave); font-size: .95rem; margin-top: 10px; }
+    .nota { font-size: .9rem; color: var(--suave); }
+    ol { padding-left: 20px; margin: 0 0 8px; }
+    ol li { margin-bottom: 6px; }
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: var(--fondo);
+      border: 1px solid var(--borde);
+      border-radius: 10px;
+      padding: 10px;
+      max-height: 340px;
+      overflow: auto;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+    details summary { cursor: pointer; color: var(--suave); margin-top: 12px; }
+    #errores {
+      background: var(--error-fondo);
+      color: var(--error);
+      border-radius: 10px;
+      padding: 10px;
+      font-size: .9rem;
+      margin-bottom: 16px;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Prueba de voces</h1>
+  <p class="bajada">Antes de construir el lector, comprobamos tres cosas en tu iPhone: qué voz te gusta, qué tan rápido la genera el teléfono y si sigue sonando con Waze abierto.</p>
+
+  <div id="errores" hidden></div>
+
+  <section>
+    <h2>Tu equipo</h2>
+    <ul class="datos" id="equipo"><li><span>Revisando…</span></li></ul>
+  </section>
+
+  <section>
+    <div class="paso">Paso 1</div>
+    <h2>Prepara la voz</h2>
+    <p class="nota">La voz se descarga una sola vez y queda guardada en este dispositivo. Funciona sin internet y tu texto no sale del teléfono.</p>
+    <div class="fila">
+      <div>
+        <label for="modelo">Modelo</label>
+        <select id="modelo">
+          <option value="v3">Supertonic 3 (mejor, 398 MB)</option>
+          <option value="v2">Supertonic 2 (liviano, 263 MB)</option>
+        </select>
+      </div>
+      <div>
+        <label for="backend">Procesamiento</label>
+        <select id="backend">
+          <option value="auto">Automático (gráfica)</option>
+          <option value="cpu">Solo procesador</option>
+        </select>
+      </div>
+    </div>
+    <button id="btn-descargar" disabled>Preparar voz</button>
+    <progress id="barra" max="100" value="0" hidden></progress>
+    <div class="estado" id="estado-modelo">Cargando…</div>
+    <button class="secundario" id="btn-borrar">Borrar voces descargadas</button>
+  </section>
+
+  <section>
+    <div class="paso">Paso 2</div>
+    <h2>Escucha y compara</h2>
+    <div class="fila">
+      <div>
+        <label for="idioma">Idioma</label>
+        <select id="idioma">
+          <option value="es">Español</option>
+          <option value="en">Inglés</option>
+        </select>
+      </div>
+      <div>
+        <label for="ritmo">Velocidad</label>
+        <select id="ritmo">
+          <option value="1">1x</option>
+          <option value="1.25">1,25x</option>
+          <option value="1.5">1,5x</option>
+          <option value="1.75">1,75x</option>
+          <option value="2">2x</option>
+        </select>
+      </div>
+    </div>
+    <div class="fila">
+      <div>
+        <label for="voz">Voz generada</label>
+        <select id="voz"></select>
+      </div>
+      <div>
+        <label for="calidad">Calidad</label>
+        <select id="calidad">
+          <option value="8">Alta (8 pasos)</option>
+          <option value="5">Media (5 pasos)</option>
+          <option value="3">Rápida (3 pasos)</option>
+        </select>
+      </div>
+    </div>
+    <label for="texto-muestra">Texto</label>
+    <textarea id="texto-muestra"></textarea>
+    <button id="btn-generar" disabled>Generar y escuchar</button>
+    <audio id="audio-muestra" controls></audio>
+    <div class="estado" id="resultado-muestra"></div>
+
+    <label for="voz-sistema">Para comparar: voz del sistema (en vivo)</label>
+    <select id="voz-sistema"></select>
+    <button class="secundario" id="btn-sistema">Escuchar voz del sistema</button>
+    <p class="nota">Si las voces del sistema suenan robóticas, en el iPhone puedes descargar mejores en Ajustes › Accesibilidad › Contenido leído › Voces.</p>
+  </section>
+
+  <section>
+    <div class="paso">Paso 3</div>
+    <h2>Prueba con Waze</h2>
+    <ol>
+      <li>Toca <strong>Empezar prueba</strong> y espera a que empiece a sonar.</li>
+      <li>Abre Waze o Maps y déjalo en pantalla. Después bloquea el teléfono un rato.</li>
+      <li>Vuelve aquí a los 5 o 10 minutos y toca <strong>Detener prueba</strong>.</li>
+      <li>Toca <strong>Copiar resultados</strong> y pégalos en el chat.</li>
+    </ol>
+    <p class="nota">Usa la voz y la calidad elegidas en el paso 2. La prueba lee el texto de abajo dos veces (unos 10 minutos).</p>
+    <label for="motor-prueba">Qué voz probar</label>
+    <select id="motor-prueba">
+      <option value="supertonic">Voz generada (la del paso 2)</option>
+      <option value="sistema">Voz del sistema (en vivo)</option>
+    </select>
+    <button id="btn-prueba" disabled>Empezar prueba</button>
+    <div class="estado" id="estado-prueba"></div>
+    <audio id="reproductor" controls></audio>
+    <pre id="resumen" hidden></pre>
+    <button class="secundario" id="btn-copiar" hidden>Copiar resultados</button>
+    <details>
+      <summary>Texto de la prueba</summary>
+      <textarea id="texto-largo" style="min-height: 200px"></textarea>
+    </details>
+    <details>
+      <summary>Registro detallado</summary>
+      <pre id="log"></pre>
+    </details>
+  </section>
+
+  <section>
+    <div class="paso">Paso 4</div>
+    <h2>Repite como app</h2>
+    <p>Para saber si funciona igual instalada como ícono: en Safari toca <strong>Compartir › Agregar a pantalla de inicio</strong>, ábrela desde el ícono y repite los pasos 1 y 3.</p>
+    <p class="nota">Desde el ícono la voz se descarga de nuevo, porque iOS guarda los datos de las apps web por separado.</p>
+  </section>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>
