@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Lector</title>
+  <meta name="description" content="Escucha tus libros y PDFs con voz natural generada en tu propio dispositivo.">
+  <meta name="theme-color" content="#1f3a5f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Lector">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="../icon-180.png">
+  <link rel="icon" href="../icon-192.png">
+  <style>
+    :root {
+      --fondo: #f6f5f2;
+      --tarjeta: #ffffff;
+      --texto: #1d1d1f;
+      --suave: #6e6e73;
+      --borde: #e3e1dc;
+      --acento: #1f5fae;
+      --acento-texto: #ffffff;
+      --resaltado: #ffe9a8;
+      --error: #b3261e;
+      --error-fondo: #fdecea;
+      --sombra: 0 -4px 18px rgba(0, 0, 0, .06);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fondo: #111214;
+        --tarjeta: #1c1d20;
+        --texto: #f2f2f4;
+        --suave: #a1a1a8;
+        --borde: #2e3035;
+        --acento: #5b9cf0;
+        --acento-texto: #0b1220;
+        --resaltado: #4a3f14;
+        --error: #ff8a80;
+        --error-fondo: #3a1a18;
+        --sombra: 0 -4px 18px rgba(0, 0, 0, .4);
+      }
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; background: var(--fondo); color: var(--texto); }
+    body { font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-text-size-adjust: 100%; }
+    button { font: inherit; color: inherit; cursor: pointer; }
+    [hidden] { display: none !important; }
+
+    .contenedor { max-width: 680px; margin: 0 auto; padding: 0 16px; }
+    .barra {
+      position: sticky; top: 0; z-index: 5;
+      display: flex; align-items: center; gap: 10px;
+      padding: max(10px, env(safe-area-inset-top)) 16px 10px;
+      background: var(--fondo);
+      border-bottom: 1px solid var(--borde);
+    }
+    .barra h1 { font-size: 1.35rem; margin: 0; flex: 1; }
+    .boton {
+      border: 0; border-radius: 12px; padding: 12px 16px; font-weight: 600;
+      background: var(--acento); color: var(--acento-texto);
+    }
+    .boton.suave { background: transparent; color: var(--acento); border: 1px solid var(--borde); }
+    .boton.peligro { background: transparent; color: var(--error); border: 1px solid var(--borde); }
+    .boton:disabled { opacity: .45; cursor: default; }
+    .ancho { display: block; width: 100%; margin-top: 10px; }
+    .icono { border: 0; background: transparent; padding: 8px; border-radius: 10px; color: var(--acento); font-weight: 600; }
+
+    .aviso { background: var(--tarjeta); border: 1px solid var(--acento); border-radius: 14px; padding: 14px; margin: 16px 0; }
+    .aviso p { margin: 0 0 6px; }
+    .error { background: var(--error-fondo); color: var(--error); border-radius: 12px; padding: 12px; margin: 12px 0; font-size: .95rem; }
+
+    /* Biblioteca */
+    .continuar {
+      margin: 16px 0; padding: 16px; border-radius: 16px;
+      background: var(--acento); color: var(--acento-texto);
+      display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; border: 0;
+    }
+    .continuar .play-grande { flex: 0 0 52px; height: 52px; border-radius: 50%; background: var(--acento-texto); color: var(--acento); display: grid; place-items: center; }
+    .continuar .etiqueta, .continuar .titulo, .continuar .detalle { display: block; }
+    .continuar .etiqueta { font-size: .8rem; opacity: .85; text-transform: uppercase; letter-spacing: .04em; }
+    .continuar .titulo { font-weight: 700; font-size: 1.1rem; margin: 2px 0; }
+    .continuar .detalle { font-size: .9rem; opacity: .9; }
+    h2.subtitulo { font-size: .85rem; color: var(--suave); text-transform: uppercase; letter-spacing: .05em; margin: 20px 0 8px; }
+    ul.lista { list-style: none; margin: 0 0 40px; padding: 0; }
+    ul.lista li {
+      display: flex; align-items: center; gap: 12px;
+      background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 14px;
+      padding: 12px 8px 12px 14px; margin-bottom: 10px;
+    }
+    .doc-abrir { flex: 1; min-width: 0; border: 0; background: transparent; text-align: left; padding: 0; }
+    .doc-titulo { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .doc-meta { color: var(--suave); font-size: .85rem; margin-top: 2px; }
+    .progreso { height: 4px; background: var(--borde); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+    .progreso > div { height: 100%; background: var(--acento); }
+    .vacia { text-align: center; color: var(--suave); padding: 40px 16px; }
+
+    /* Lector */
+    .lector-barra { gap: 6px; }
+    .lector-barra .titulos { flex: 1; min-width: 0; }
+    #lector-titulo { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #secciones {
+      max-width: 100%; margin-top: 2px; font: inherit; font-size: .85rem; color: var(--suave);
+      background: transparent; border: 0; padding: 0; -webkit-appearance: none; appearance: none;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #texto {
+      font: 19px/1.7 ui-serif, "New York", Georgia, "Times New Roman", serif;
+      padding-top: 8px; padding-bottom: calc(190px + env(safe-area-inset-bottom));
+    }
+    #texto p { margin: 0 0 1em; }
+    #texto .o { border-radius: 4px; transition: background-color .2s; }
+    #texto .o.actual { background: var(--resaltado); box-shadow: 0 0 0 2px var(--resaltado); }
+    #texto h3.seccion { font: 600 .85rem/1.3 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--suave); text-transform: uppercase; letter-spacing: .05em; margin: 12px 0 18px; }
+    .navegar-seccion { display: flex; gap: 10px; margin: 8px 0 24px; }
+    .navegar-seccion .boton { flex: 1; }
+    #btn-seguir {
+      position: fixed; left: 50%; transform: translateX(-50%);
+      bottom: calc(150px + env(safe-area-inset-bottom)); z-index: 6;
+      border: 0; border-radius: 999px; padding: 10px 16px; font-weight: 600;
+      background: var(--texto); color: var(--fondo); box-shadow: 0 4px 14px rgba(0,0,0,.2);
+    }
+    .reproductor {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+      background: var(--tarjeta); border-top: 1px solid var(--borde); box-shadow: var(--sombra);
+      padding: 10px 16px calc(12px + env(safe-area-inset-bottom));
+    }
+    .reproductor .contenedor { padding: 0; }
+    .rep-info { display: flex; justify-content: space-between; gap: 10px; font-size: .85rem; color: var(--suave); }
+    #rep-estado { min-height: 1.2em; font-size: .85rem; color: var(--acento); margin-top: 2px; }
+    .controles { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
+    .control { border: 0; background: transparent; width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; color: var(--texto); }
+    .control svg { width: 28px; height: 28px; }
+    #btn-play { width: 66px; height: 66px; background: var(--acento); color: var(--acento-texto); }
+    #btn-play svg { width: 30px; height: 30px; }
+    .chip { border: 1px solid var(--borde); background: transparent; border-radius: 999px; padding: 8px 12px; font-weight: 600; min-width: 64px; }
+
+    /* Diálogos */
+    dialog {
+      width: min(560px, calc(100vw - 24px)); max-height: calc(100vh - 40px);
+      border: 1px solid var(--borde); border-radius: 18px; padding: 18px;
+      background: var(--tarjeta); color: var(--texto);
+    }
+    dialog::backdrop { background: rgba(0, 0, 0, .35); }
+    dialog h2 { margin: 0 0 12px; font-size: 1.2rem; }
+    label { display: block; font-size: .9rem; color: var(--suave); margin: 12px 0 4px; }
+    select, textarea, input[type="text"] {
+      width: 100%; font: inherit; color: var(--texto); background: var(--fondo);
+      border: 1px solid var(--borde); border-radius: 10px; padding: 10px;
+    }
+    textarea { min-height: 180px; resize: vertical; }
+    .fila { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .nota { font-size: .85rem; color: var(--suave); margin: 8px 0 0; }
+    progress { width: 100%; height: 10px; margin-top: 10px; }
+    .acciones { display: flex; gap: 10px; margin-top: 16px; }
+    .acciones .boton { flex: 1; }
+
+    #cargando {
+      position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
+      background: rgba(0, 0, 0, .35);
+    }
+    #cargando .caja { background: var(--tarjeta); border-radius: 16px; padding: 20px; width: min(360px, calc(100vw - 32px)); text-align: center; }
+  </style>
+</head>
+<body>
+
+<section id="vista-biblioteca">
+  <header class="barra">
+    <h1>Lector</h1>
+    <button class="icono" id="btn-ajustes-biblioteca" aria-label="Voz">Voz</button>
+    <button class="boton" id="btn-agregar">+ Agregar</button>
+  </header>
+  <div class="contenedor">
+    <div id="error-biblioteca" class="error" hidden></div>
+    <div id="aviso-voz" class="aviso" hidden>
+      <p id="aviso-voz-texto"></p>
+      <button class="boton ancho" id="btn-descargar-voz">Descargar la voz</button>
+    </div>
+    <button id="continuar" class="continuar" hidden>
+      <span class="play-grande" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
+      </span>
+      <span>
+        <span class="etiqueta">Seguir escuchando</span>
+        <span class="titulo" id="continuar-titulo"></span>
+        <span class="detalle" id="continuar-detalle"></span>
+      </span>
+    </button>
+    <h2 class="subtitulo" id="titulo-lista" hidden>Tu biblioteca</h2>
+    <ul class="lista" id="lista"></ul>
+    <div class="vacia" id="vacia" hidden>
+      <p>Agrega un PDF, un EPUB o pega un texto para empezar a escuchar.</p>
+      <button class="boton" id="btn-agregar-vacia">+ Agregar</button>
+    </div>
+  </div>
+</section>
+
+<section id="vista-lector" hidden>
+  <header class="barra lector-barra">
+    <button class="icono" id="btn-volver" aria-label="Biblioteca">‹ Biblioteca</button>
+    <div class="titulos">
+      <div id="lector-titulo"></div>
+      <select id="secciones" aria-label="Ir a la sección"></select>
+    </div>
+    <button class="icono" id="btn-ajustes" aria-label="Voz">Voz</button>
+  </header>
+  <div class="contenedor">
+    <div id="error-lector" class="error" hidden></div>
+    <article id="texto"></article>
+  </div>
+  <button id="btn-seguir" hidden>Volver a donde voy</button>
+  <footer class="reproductor">
+    <div class="contenedor">
+      <div class="rep-info"><span id="rep-seccion"></span><span id="rep-progreso"></span></div>
+      <div id="rep-estado"></div>
+      <div class="controles">
+        <button class="chip" id="btn-velocidad" aria-label="Velocidad">1x</button>
+        <button class="control" id="btn-anterior" aria-label="Oración anterior">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+        </button>
+        <button class="control" id="btn-play" aria-label="Reproducir">
+          <svg viewBox="0 0 24 24" fill="currentColor" id="icono-play"><path d="M8 5.5v13l11-6.5z"/></svg>
+          <svg viewBox="0 0 24 24" fill="currentColor" id="icono-pausa" hidden><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>
+        </button>
+        <button class="control" id="btn-siguiente" aria-label="Oración siguiente">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg>
+        </button>
+        <button class="chip" id="btn-idioma" aria-label="Idioma del documento">ES</button>
+      </div>
+    </div>
+  </footer>
+</section>
+
+<dialog id="dlg-agregar">
+  <h2>Agregar</h2>
+  <button class="boton ancho" id="btn-elegir-archivo">Elegir archivo (PDF, EPUB o texto)</button>
+  <button class="boton suave ancho" id="btn-pegar">Pegar texto</button>
+  <p class="nota">Los EPUB con protección (DRM), como los comprados en Apple Books o Kindle, no se pueden leer. Los PDF escaneados (fotos de páginas) tampoco, por ahora.</p>
+  <div class="acciones"><button class="boton suave" data-cerrar>Cancelar</button></div>
+</dialog>
+
+<dialog id="dlg-pegar">
+  <h2>Pegar texto</h2>
+  <label for="pegar-titulo">Título (opcional)</label>
+  <input type="text" id="pegar-titulo" placeholder="Ej.: Artículo sobre presupuesto">
+  <label for="pegar-texto">Texto</label>
+  <textarea id="pegar-texto" placeholder="Pega aquí el texto que quieres escuchar"></textarea>
+  <div class="acciones">
+    <button class="boton suave" data-cerrar>Cancelar</button>
+    <button class="boton" id="btn-guardar-pegado">Guardar</button>
+  </div>
+</dialog>
+
+<dialog id="dlg-voz">
+  <h2>Voz</h2>
+  <div class="fila">
+    <div>
+      <label for="aj-modelo">Modelo</label>
+      <select id="aj-modelo">
+        <option value="v2">Supertonic 2 · 263 MB</option>
+        <option value="v3q">Supertonic 3 liviano · 145 MB</option>
+        <option value="v3">Supertonic 3 completo · 398 MB</option>
+      </select>
+    </div>
+    <div>
+      <label for="aj-voz">Voz</label>
+      <select id="aj-voz"></select>
+    </div>
+  </div>
+  <div class="fila">
+    <div>
+      <label for="aj-pasos">Calidad</label>
+      <select id="aj-pasos">
+        <option value="8">Alta</option>
+        <option value="5">Media</option>
+        <option value="3">Rápida</option>
+      </select>
+    </div>
+    <div>
+      <label for="aj-backend">Procesamiento</label>
+      <select id="aj-backend">
+        <option value="auto">Automático</option>
+        <option value="cpu">Solo procesador</option>
+      </select>
+    </div>
+  </div>
+  <p class="nota" id="aj-nota-modelo"></p>
+  <button class="boton suave ancho" id="btn-probar-voz">Probar esta voz</button>
+  <button class="boton ancho" id="btn-preparar-voz">Descargar y preparar</button>
+  <progress id="aj-barra" max="100" value="0" hidden></progress>
+  <p class="nota" id="aj-estado"></p>
+  <div class="acciones">
+    <button class="boton peligro" id="btn-borrar-voces">Borrar voces descargadas</button>
+    <button class="boton" data-cerrar>Listo</button>
+  </div>
+</dialog>
+
+<div id="cargando" hidden>
+  <div class="caja">
+    <p id="cargando-texto">Leyendo…</p>
+    <progress id="cargando-barra" max="100" value="0"></progress>
+  </div>
+</div>
+
+<input type="file" id="archivo" accept=".pdf,.epub,.txt,.md,application/pdf,application/epub+zip,text/plain,text/markdown" hidden>
+<audio id="audio" preload="auto"></audio>
+
+<script type="module" src="main.js?v=1"></script>
+</body>
+</html>

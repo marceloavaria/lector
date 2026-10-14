@@ -1,8 +1,16 @@
-# Lector · Prueba de voces
+# Lector
 
-Página de prueba para un lector en voz alta que funcione igual en el computador y
-en el iPhone. Genera la voz dentro del propio dispositivo con el modelo abierto
-Supertonic, sin enviar el texto a ningún servidor.
+Lector en voz alta que funciona igual en el computador y en el iPhone. Genera la
+voz dentro del propio dispositivo con el modelo abierto Supertonic, sin enviar el
+texto a ningún servidor.
+
+- **App** (`app/`): importa PDF, EPUB y texto pegado; biblioteca guardada en el
+  dispositivo; lectura con la oración resaltada; retoma donde quedaste; funciona
+  sin conexión una vez abierta.
+- **Prueba de voces** (raíz): compara voces y mide si el audio sigue con otra app
+  en pantalla.
+
+## Prueba de voces
 
 Mide tres cosas:
 
@@ -29,3 +37,8 @@ Luego abre http://localhost:8765.
   OpenRAIL-M. No se redistribuyen en este repositorio.
 - Inferencia con [ONNX Runtime Web](https://github.com/microsoft/onnxruntime)
   (MIT), cargado desde jsDelivr.
+- Versión int8 de Supertonic 3 publicada por
+  [csukuangfj2](https://huggingface.co/csukuangfj2/sherpa-onnx-supertonic-3-tts-int8-2026-05-11)
+  (sherpa-onnx).
+- PDF con [pdf.js](https://github.com/mozilla/pdf.js) (Apache 2.0) y EPUB con
+  [JSZip](https://github.com/Stuk/jszip) (MIT), ambos desde jsDelivr.

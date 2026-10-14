@@ -229,7 +229,14 @@ export class Supertonic {
   }
 
   // Sintetiza un trozo corto (hasta ~300 caracteres). Devuelve PCM mono en Float32.
-  async sintetizar(texto, lang, codigoVoz, { pasos = 8, velocidad = 1.05 } = {}) {
+  // Las llamadas se encolan: el motor no admite dos generaciones a la vez.
+  sintetizar(texto, lang, codigoVoz, opciones = {}) {
+    const turno = (this.cola || Promise.resolve()).then(() => this.#generar(texto, lang, codigoVoz, opciones));
+    this.cola = turno.catch(() => {});
+    return turno;
+  }
+
+  async #generar(texto, lang, codigoVoz, { pasos = 8, velocidad = 1.05 } = {}) {
     const estilo = await this.estilo(codigoVoz);
     const proc = preprocesar(texto, lang);
     const T = proc.length;
