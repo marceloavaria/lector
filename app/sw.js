@@ -1,17 +1,17 @@
 // Service worker: guarda la app para abrirla sin internet (en el auto, en un túnel).
 // Los modelos de voz no pasan por aquí: los guarda supertonic.js en su propio caché.
 
-const VERSION = 'lector-app-v4';
+const VERSION = 'lector-app-v5';
 const ARCHIVOS = [
   './',
   './index.html',
-  './main.js?v=4',
+  './main.js?v=5',
   './db.js?v=1',
   './texto.js?v=1',
   './importar.js?v=1',
-  './lectura.js?v=2',
+  './lectura.js?v=3',
   './sync.js?v=1',
-  './voz.js?v=1',
+  './voz.js?v=2',
   './manifest.webmanifest',
   '../supertonic.js?v=4',
   '../icon-180.png',

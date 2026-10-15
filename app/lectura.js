@@ -2,7 +2,7 @@
 // encadena los audios en un solo elemento <audio> (así sigue sonando con otra app en
 // pantalla) y avisa qué oración está sonando para resaltarla y guardarla.
 
-import { cargarMotor, modulo, motorListo } from './voz.js?v=1';
+import { cargarMotor, modulo, motorListo, reiniciarMotor } from './voz.js?v=2';
 import { actualizarDoc } from './db.js?v=1';
 
 const BUFFER_SEG = 90;     // segundos de audio generados por delante
@@ -11,6 +11,10 @@ const PAUSA_ORACION = 0.18;
 const PAUSA_PARRAFO = 0.55;
 
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Fallos de la tarjeta gráfica a mitad de una generación (en el iPhone pasa al volver de
+// otra app o por memoria). Se distinguen de errores del texto o de la descarga.
+const esFalloGpu = (e) => /OrtRun|MapAsync|map async|webgpu|wgpu|device lost|GPUDevice/i.test(e?.message || String(e));
 
 // Medio segundo de silencio en WAV, para desbloquear el audio en el mismo toque.
 function silencioUrl() {
@@ -77,6 +81,7 @@ export class Reproductor extends EventTarget {
     this.enAudio = -1;
     this.finParrafo = new Set(contenido.parrafos.slice(1).map((p) => p - 1));
     this.finParrafo.add(this.total - 1);
+    this.fallosGpu = 0;
     this.#mediaSession();
     this.#emitir('oracion', this.actual);
   }
@@ -320,7 +325,23 @@ export class Reproductor extends EventTarget {
         }
         this.listoParaGenerar = `${modelo}/${backend}`;
         const st = await modulo();
-        const r = await motor.sintetizar(this.contenido.oraciones[i], this.doc.idioma, voz, { pasos });
+        let r;
+        try {
+          r = await motor.sintetizar(this.contenido.oraciones[i], this.doc.idioma, voz, { pasos });
+        } catch (e) {
+          if (epoca !== this.epoca || !this.doc) continue;
+          if (!esFalloGpu(e) || motor.backend !== 'webgpu' || this.fallosGpu >= 2) { this.#fallo(e); return; }
+          // Primera vez: se recarga el motor (desde el caché, unos segundos). Segunda: se pasa al procesador.
+          this.fallosGpu++;
+          console.warn('Falló la tarjeta gráfica, se reintenta', e);
+          await reiniciarMotor();
+          if (this.fallosGpu >= 2) {
+            this.ajustes = { ...this.ajustes, backend: 'cpu' };
+            this.#emitir('aviso', 'La tarjeta gráfica falló dos veces. Sigo con el procesador, que es más lento.');
+          }
+          this.#estado('cargando-voz');
+          continue;
+        }
         if (epoca !== this.epoca || !this.doc) continue;
         const pausa = this.finParrafo.has(i) ? PAUSA_PARRAFO : PAUSA_ORACION;
         this.listos.set(i, { url: URL.createObjectURL(st.wavBlob(r.pcm, motor.sampleRate, pausa)), seg: r.segundos + pausa });

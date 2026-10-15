@@ -64,6 +64,13 @@ export async function cargarMotor({ modelo, backend }, alAvanzar) {
   }
 }
 
+// Suelta el motor para que la próxima generación lo vuelva a cargar desde el caché.
+// Sirve cuando la tarjeta gráfica falla a mitad de camino (iPhone: "map async was not successful").
+export async function reiniciarMotor() {
+  if (cargando) await cargando.catch(() => {});
+  if (motor) { try { await motor.liberar(); } catch { /* ya liberado */ } motor = null; }
+}
+
 export async function borrarVoces() {
   if (motor) { await motor.liberar(); motor = null; }
   return (await modulo()).borrarDescargas();

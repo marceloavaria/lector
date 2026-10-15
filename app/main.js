@@ -1,7 +1,7 @@
 import { listarDocs, leerDoc, leerContenido, guardarDocumento, actualizarDoc, borrarDocumento } from './db.js?v=1';
 import { importarArchivo, importarTextoPegado } from './importar.js?v=1';
-import { Reproductor } from './lectura.js?v=2';
-import { ajustesVoz, guardarAjustesVoz, cargarMotor, estaDescargado, borrarVoces, caidaAnterior, modulo } from './voz.js?v=1';
+import { Reproductor } from './lectura.js?v=3';
+import { ajustesVoz, guardarAjustesVoz, cargarMotor, estaDescargado, borrarVoces, caidaAnterior, modulo } from './voz.js?v=2';
 import {
   sincronizar, configuracion, guardarConfiguracion, desconectar, probarConexion, ultimaSync,
   registrarBorrado, quitarBorrado, REPO_POR_DEFECTO, URL_CREAR_CLAVE,
@@ -828,6 +828,12 @@ function conectar() {
       : 'Preparando la voz…';
   });
   reproductor.addEventListener('error', (e) => mostrarError('#error-lector', e.detail));
+  reproductor.addEventListener('aviso', async (e) => {
+    // El reproductor ya cambió al procesador; se guarda para que la próxima vez parta así.
+    ajustes = await guardarAjustesVoz({ backend: 'cpu' });
+    $('#aj-backend').value = 'cpu';
+    mostrarError('#error-lector', new Error(e.detail));
+  });
 }
 
 async function iniciar() {
