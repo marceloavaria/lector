@@ -73,6 +73,7 @@ export class Reproductor extends EventTarget {
     this.ajustes = ajustes;
     this.velocidad = ajustes.velocidad || 1;
     this.actual = Math.max(0, Math.min(doc.oracion || 0, this.total - 1));
+    this.cambioPosicion = doc.progresoT || 0;
     this.enAudio = -1;
     this.finParrafo = new Set(contenido.parrafos.slice(1).map((p) => p - 1));
     this.finParrafo.add(this.total - 1);
@@ -128,10 +129,20 @@ export class Reproductor extends EventTarget {
     return this.sonando ? this.pausar() : this.play();
   }
 
+  // Otro dispositivo avanzó más (llegó por la sincronización). Solo si aquí no está sonando.
+  posicionarDesdeSync(i, cuando) {
+    if (!this.doc || this.sonando) return;
+    this.actual = Math.max(0, Math.min(i, this.total - 1));
+    this.cambioPosicion = cuando;
+    this.enAudio = -1;
+    this.#emitir('oracion', this.actual);
+  }
+
   irA(i) {
     if (!this.doc) return;
     i = Math.max(0, Math.min(i, this.total - 1));
     this.actual = i;
+    this.cambioPosicion = Date.now();
     this.#podar();
     if (this.sonando) {
       if (this.listos.has(i)) this.#reproducir(i);
@@ -186,7 +197,9 @@ export class Reproductor extends EventTarget {
     clearTimeout(this.temporizador);
     this.temporizador = null;
     if (!this.doc) return Promise.resolve();
-    return actualizarDoc(this.doc.id, { oracion: this.actual, abierto: Date.now() }).catch(() => {});
+    // progresoT es cuándo cambió la posición (no cuándo se guardó): así la sincronización
+    // no pisa con una posición vieja la que avanzó otro dispositivo.
+    return actualizarDoc(this.doc.id, { oracion: this.actual, abierto: Date.now(), progresoT: this.cambioPosicion || 0 }).catch(() => {});
   }
 
   // ---------- interno ----------
@@ -236,6 +249,7 @@ export class Reproductor extends EventTarget {
   #reproducir(i) {
     const c = this.listos.get(i);
     this.actual = i;
+    this.cambioPosicion = Date.now();
     this.#emitir('oracion', i);
     this.#guardarPronto();
     if (!c) {

@@ -154,6 +154,16 @@
     .acciones { display: flex; gap: 10px; margin-top: 16px; }
     .acciones .boton { flex: 1; }
 
+    .estado-sync {
+      display: block; width: 100%; margin-top: 10px; padding: 6px 0;
+      border: 0; background: transparent; text-align: left;
+      font-size: .85rem; color: var(--suave);
+    }
+    .estado-sync.error-sync { color: var(--error); }
+    ol.pasos { padding-left: 20px; margin: 8px 0; }
+    ol.pasos li { margin-bottom: 8px; }
+    a { color: var(--acento); }
+
     #cargando {
       position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
       background: rgba(0, 0, 0, .35);
@@ -170,6 +180,7 @@
     <button class="boton" id="btn-agregar">+ Agregar</button>
   </header>
   <div class="contenedor">
+    <button id="estado-sync" class="estado-sync">Sincronizar entre dispositivos</button>
     <div id="error-biblioteca" class="error" hidden></div>
     <div id="aviso-voz" class="aviso" hidden>
       <p id="aviso-voz-texto"></p>
@@ -294,6 +305,31 @@
   </div>
 </dialog>
 
+<dialog id="dlg-sync">
+  <h2>Sincronizar</h2>
+  <p>Tu biblioteca y dónde vas en cada libro se guardan en tu repositorio privado <strong id="sync-repo-nombre"></strong> en GitHub. Así sigues en el computador donde quedaste en el auto.</p>
+  <div id="sync-pasos">
+    <ol class="pasos">
+      <li><a id="link-clave" target="_blank" rel="noopener">Crea una clave en GitHub</a>. En <strong>Repository access</strong> elige <strong>Only select repositories</strong> y marca <strong>lector-datos</strong>. Revisa que <strong>Contents</strong> diga <strong>Read and write</strong> y toca <strong>Generate token</strong>.</li>
+      <li>Copia la clave (empieza con <code>github_pat_</code>) y pégala aquí. La misma clave sirve en el iPhone y en tus computadores.</li>
+    </ol>
+    <label for="sync-token">Clave de GitHub</label>
+    <input type="password" id="sync-token" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…">
+    <details>
+      <summary class="nota">Otro repositorio</summary>
+      <label for="sync-repo">Repositorio (dueño/nombre)</label>
+      <input type="text" id="sync-repo" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </details>
+  </div>
+  <p class="nota" id="sync-estado"></p>
+  <div class="acciones">
+    <button class="boton peligro" id="btn-sync-desconectar" hidden>Desconectar</button>
+    <button class="boton" id="btn-sync-conectar">Conectar</button>
+  </div>
+  <button class="boton suave ancho" id="btn-sync-ahora" hidden>Sincronizar ahora</button>
+  <div class="acciones"><button class="boton suave" data-cerrar>Cerrar</button></div>
+</dialog>
+
 <div id="cargando" hidden>
   <div class="caja">
     <p id="cargando-texto">Leyendo…</p>
@@ -304,6 +340,6 @@
 <input type="file" id="archivo" accept=".pdf,.epub,.txt,.md,application/pdf,application/epub+zip,text/plain,text/markdown" hidden>
 <audio id="audio" preload="auto"></audio>
 
-<script type="module" src="main.js?v=1"></script>
+<script type="module" src="main.js?v=3"></script>
 </body>
 </html>

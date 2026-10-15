@@ -1,7 +1,11 @@
 import { listarDocs, leerDoc, leerContenido, guardarDocumento, actualizarDoc, borrarDocumento } from './db.js?v=1';
 import { importarArchivo, importarTextoPegado } from './importar.js?v=1';
-import { Reproductor } from './lectura.js?v=1';
+import { Reproductor } from './lectura.js?v=2';
 import { ajustesVoz, guardarAjustesVoz, cargarMotor, estaDescargado, borrarVoces, caidaAnterior, modulo } from './voz.js?v=1';
+import {
+  sincronizar, configuracion, guardarConfiguracion, desconectar, probarConexion, ultimaSync,
+  registrarBorrado, quitarBorrado, REPO_POR_DEFECTO, URL_CREAR_CLAVE,
+} from './sync.js?v=1';
 
 const $ = (s) => document.querySelector(s);
 const VELOCIDADES = [0.8, 1, 1.15, 1.25, 1.5, 1.75, 2, 2.5, 3];
@@ -66,7 +70,11 @@ async function pintarBiblioteca() {
   $('#vacia').hidden = docs.length > 0;
   $('#titulo-lista').hidden = docs.length === 0;
 
-  const reciente = docs.find((d) => d.abierto && (d.oracion || 0) < d.totalOraciones - 1);
+  // El último que escuchaste, en este u otro dispositivo (llega por la sincronización).
+  const ultimaVez = (d) => Math.max(d.progresoT || 0, d.abierto || 0);
+  const reciente = docs
+    .filter((d) => ultimaVez(d) && (d.oracion || 0) < d.totalOraciones - 1)
+    .sort((a, b) => ultimaVez(b) - ultimaVez(a))[0];
   $('#continuar').hidden = !reciente;
   if (reciente) {
     $('#continuar-titulo').textContent = reciente.titulo;
@@ -100,6 +108,8 @@ async function pintarBiblioteca() {
       if (!confirm(`¿Borrar "${d.titulo}" de la biblioteca? Se pierde también dónde quedaste.`)) return;
       if (docAbierto?.id === d.id) { reproductor.cerrar(); docAbierto = null; }
       await borrarDocumento(d.id);
+      await registrarBorrado(d.id);
+      pedirSync(1500);
       pintarBiblioteca();
     };
     li.append(abrir, borrar);
@@ -121,7 +131,11 @@ async function revisarVoz() {
 
 async function guardarYAbrir({ doc, contenido: cont }, archivo) {
   const existente = await leerDoc(doc.id);
-  if (!existente) await guardarDocumento(doc, cont, archivo);
+  if (!existente) {
+    await guardarDocumento(doc, cont, archivo);
+    await quitarBorrado(doc.id);
+    pedirSync(1500);
+  }
   $('#cargando').hidden = true;
   await abrirDoc(doc.id);
 }
@@ -185,6 +199,9 @@ async function abrirDoc(id, { reproducir = false } = {}) {
     centrarActual(true);
     return;
   }
+  // Si la app recién abrió, espera (poco) la sincronización para partir donde quedaste
+  // en el otro dispositivo y no desde una posición vieja.
+  if (syncInicial) await Promise.race([syncInicial, new Promise((r) => setTimeout(r, 4000))]);
   const [doc, cont] = await Promise.all([leerDoc(id), leerContenido(id)]);
   if (!doc || !cont) {
     mostrarError('#error-biblioteca', new Error('No encontré ese documento.'));
@@ -391,6 +408,147 @@ async function probarVoz() {
   }
 }
 
+// ---------- sincronización ----------
+
+let syncInicial = null;
+let temporizadorSync = null;
+let venceSync = 0;
+let errorSync = null;
+
+function resumenSync(r) {
+  if (!r) return '';
+  const n = (k, uno, varios) => `${k} ${k === 1 ? uno : varios}`;
+  const partes = [];
+  if (r.subidos) partes.push(`subí ${n(r.subidos, 'documento', 'documentos')}`);
+  if (r.bajados) partes.push(`bajé ${n(r.bajados, 'documento', 'documentos')}`);
+  if (r.posiciones) partes.push(`actualicé ${n(r.posiciones, 'posición', 'posiciones')}`);
+  if (r.borrados) partes.push(`borré ${n(r.borrados, 'documento', 'documentos')}`);
+  if (!partes.length) return 'Todo estaba al día.';
+  const texto = partes.length > 1 ? `${partes.slice(0, -1).join(', ')} y ${partes.at(-1)}` : partes[0];
+  return `${texto[0].toUpperCase()}${texto.slice(1)}.`;
+}
+
+function haceCuanto(ts) {
+  const seg = (Date.now() - ts) / 1000;
+  if (seg < 60) return 'recién';
+  if (seg < 3600) return `hace ${Math.round(seg / 60)} min`;
+  if (seg < 86400) return `hace ${Math.round(seg / 3600)} h`;
+  return `hace ${Math.round(seg / 86400)} días`;
+}
+
+async function pintarEstadoSync(sincronizando = false) {
+  const el = $('#estado-sync');
+  const cfg = await configuracion();
+  el.classList.toggle('error-sync', !!errorSync);
+  if (!cfg?.token) el.textContent = 'Sincronizar entre dispositivos ›';
+  else if (sincronizando) el.textContent = 'Sincronizando…';
+  else if (errorSync) el.textContent = `No se pudo sincronizar: ${errorSync} ›`;
+  else {
+    const ts = await ultimaSync();
+    el.textContent = ts ? `Sincronizado ${haceCuanto(ts)}` : 'Sincronización activada';
+  }
+}
+
+// Agenda una sincronización dentro de `ms`. Si ya hay una antes, se respeta esa:
+// así una lectura continua sincroniza cada minuto y no espera a que pares.
+function pedirSync(ms) {
+  const vence = Date.now() + ms;
+  if (temporizadorSync && venceSync <= vence) return;
+  clearTimeout(temporizadorSync);
+  venceSync = vence;
+  temporizadorSync = setTimeout(() => { temporizadorSync = null; correrSync(); }, ms);
+}
+
+async function correrSync() {
+  if (!(await configuracion())?.token) return null;
+  pintarEstadoSync(true);
+  try {
+    if (reproductor.doc) await reproductor.guardarYa();
+    const r = await sincronizar();
+    errorSync = null;
+    if (r && (r.bajados || r.borrados || r.posiciones)) await aplicarCambiosRemotos();
+    return r;
+  } catch (e) {
+    errorSync = e.message || String(e);
+    return null;
+  } finally {
+    pintarEstadoSync();
+  }
+}
+
+// Lo que llegó de otro dispositivo se refleja en pantalla.
+async function aplicarCambiosRemotos() {
+  if (docAbierto) {
+    const doc = await leerDoc(docAbierto.id);
+    if (!doc) {
+      reproductor.cerrar();
+      docAbierto = null;
+      mostrarVista('biblioteca');
+    } else if ((doc.progresoT || 0) > (reproductor.cambioPosicion || 0) && !reproductor.sonando) {
+      docAbierto.oracion = doc.oracion;
+      reproductor.posicionarDesdeSync(doc.oracion, doc.progresoT);
+    }
+  }
+  if (!$('#vista-biblioteca').hidden) await pintarBiblioteca();
+}
+
+async function abrirSync() {
+  const cfg = await configuracion();
+  const repo = cfg?.repo || REPO_POR_DEFECTO;
+  $('#sync-repo-nombre').textContent = repo;
+  $('#sync-repo').value = repo;
+  $('#sync-token').value = '';
+  $('#link-clave').href = URL_CREAR_CLAVE;
+  const conectado = !!cfg?.token;
+  $('#sync-pasos').hidden = conectado;
+  $('#btn-sync-desconectar').hidden = !conectado;
+  $('#btn-sync-ahora').hidden = !conectado;
+  $('#btn-sync-conectar').textContent = conectado ? 'Cambiar clave' : 'Conectar';
+  $('#sync-estado').textContent = conectado
+    ? `Conectado. ${errorSync ? `Último error: ${errorSync}` : `Última sincronización: ${haceCuanto(await ultimaSync())}.`}`
+    : '';
+  $('#dlg-sync').showModal();
+}
+
+async function conectarSync() {
+  if (!$('#sync-pasos').hidden) {
+    const token = $('#sync-token').value.trim();
+    const repo = ($('#sync-repo').value.trim() || REPO_POR_DEFECTO).replace(/^https:\/\/github\.com\//, '');
+    if (!token) {
+      $('#sync-estado').textContent = 'Pega la clave de GitHub primero.';
+      return;
+    }
+    const btn = $('#btn-sync-conectar');
+    btn.disabled = true;
+    $('#sync-estado').textContent = 'Revisando la clave…';
+    try {
+      // window.__apiGithub solo existe en pruebas locales con un GitHub simulado.
+      const cfg = { token, repo, ...(window.__apiGithub ? { apiBase: window.__apiGithub } : {}) };
+      await probarConexion(cfg);
+      await guardarConfiguracion(cfg);
+      $('#sync-token').value = '';
+      $('#sync-estado').textContent = 'Clave correcta. Sincronizando…';
+      const r = await correrSync();
+      $('#sync-estado').textContent = errorSync
+        ? `Conectado, pero falló la primera sincronización: ${errorSync}`
+        : `Listo. ${resumenSync(r)}`;
+      $('#sync-pasos').hidden = true;
+      $('#btn-sync-desconectar').hidden = false;
+      $('#btn-sync-ahora').hidden = false;
+      btn.textContent = 'Cambiar clave';
+    } catch (e) {
+      $('#sync-estado').textContent = e.message || String(e);
+    } finally {
+      btn.disabled = false;
+    }
+  } else {
+    // "Cambiar clave": se vuelven a mostrar los pasos.
+    $('#sync-pasos').hidden = false;
+    $('#btn-sync-conectar').textContent = 'Conectar';
+    $('#sync-estado').textContent = '';
+  }
+}
+
 // ---------- arranque ----------
 
 function conectar() {
@@ -426,7 +584,8 @@ function conectar() {
     if (!docAbierto) return;
     const idioma = docAbierto.idioma === 'es' ? 'en' : 'es';
     docAbierto.idioma = idioma;
-    await actualizarDoc(docAbierto.id, { idioma });
+    await actualizarDoc(docAbierto.id, { idioma, metaT: Date.now() });
+    pedirSync(1500);
     $('#btn-idioma').textContent = idioma.toUpperCase();
     $('#texto').lang = idioma;
     reproductor.cambiarAjustes(ajustes, idioma);
@@ -449,6 +608,27 @@ function conectar() {
   window.addEventListener('wheel', marcarScroll, { passive: true });
   $('#btn-seguir').onclick = () => { ultimoScrollUsuario = 0; centrarActual(); };
 
+  $('#estado-sync').onclick = abrirSync;
+  $('#btn-sync-conectar').onclick = conectarSync;
+  $('#btn-sync-ahora').onclick = async () => {
+    $('#sync-estado').textContent = 'Sincronizando…';
+    const r = await correrSync();
+    $('#sync-estado').textContent = errorSync
+      ? `Error: ${errorSync}`
+      : `Listo. ${resumenSync(r)}`;
+  };
+  $('#btn-sync-desconectar').onclick = async () => {
+    if (!confirm('¿Desconectar este dispositivo? Tus documentos quedan aquí y en GitHub, pero dejan de sincronizarse.')) return;
+    await desconectar();
+    errorSync = null;
+    $('#dlg-sync').close();
+    pintarEstadoSync();
+  };
+  document.addEventListener('visibilitychange', async () => {
+    if (document.hidden) pedirSync(400); // sube la posición antes de que el teléfono duerma la app
+    else if (Date.now() - (await ultimaSync()) > 60000) pedirSync(0);
+  });
+
   $('#btn-ajustes').onclick = abrirAjustes;
   $('#btn-ajustes-biblioteca').onclick = abrirAjustes;
   $('#btn-descargar-voz').onclick = async () => { await abrirAjustes(); prepararVoz(); };
@@ -463,8 +643,14 @@ function conectar() {
     revisarVoz();
   };
 
-  reproductor.addEventListener('oracion', (e) => pintarOracion(e.detail));
-  reproductor.addEventListener('estado', (e) => pintarEstado(e.detail));
+  reproductor.addEventListener('oracion', (e) => {
+    pintarOracion(e.detail);
+    pedirSync(60000);
+  });
+  reproductor.addEventListener('estado', (e) => {
+    pintarEstado(e.detail);
+    if (e.detail === 'pausa' || e.detail === 'fin') pedirSync(2000);
+  });
   reproductor.addEventListener('voz', (e) => {
     const { fase, bytes, totalBytes } = e.detail;
     $('#rep-estado').textContent = fase === 'descargando'
@@ -488,6 +674,8 @@ async function iniciar() {
   }
 
   await pintarBiblioteca();
+  pintarEstadoSync();
+  syncInicial = correrSync().finally(() => { syncInicial = null; });
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
 
