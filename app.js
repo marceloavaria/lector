@@ -599,7 +599,7 @@ async function iniciar() {
   speechSynthesis.addEventListener?.('voiceschanged', llenarVocesSistema);
 
   try {
-    st = await import('./supertonic.js?v=4');
+    st = await import('./supertonic.js?v=5');
     const sel = $('#voz');
     for (const [codigo, nombre] of st.VOCES) {
       const op = document.createElement('option');

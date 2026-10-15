@@ -4,7 +4,7 @@ import { leerAjuste, guardarAjuste } from './db.js?v=1';
 
 let st = null;
 let motor = null;
-let cargando = null;
+let cargando = Promise.resolve(); // cola de cargas (ver enTurno)
 
 export const AJUSTES_VOZ = {
   modelo: 'v2',     // probado en el iPhone: 16x tiempo real con WebGPU
@@ -15,7 +15,7 @@ export const AJUSTES_VOZ = {
 };
 
 export async function modulo() {
-  if (!st) st = await import('../supertonic.js?v=4');
+  if (!st) st = await import('../supertonic.js?v=5');
   return st;
 }
 
@@ -40,49 +40,56 @@ export async function estaDescargado(modelo) {
   return (await modulo()).estaDescargado(modelo);
 }
 
+// Las cargas, recargas y borrados van de a uno. Antes, la carga anticipada al abrir la app y
+// el play podían cargar a la vez: una soltaba el motor que la otra estaba usando.
+function enTurno(fn) {
+  const turno = cargando.then(fn);
+  cargando = turno.catch(() => {});
+  return turno;
+}
+
 // Carga (y si hace falta descarga) el modelo pedido. Libera el anterior antes.
-export async function cargarMotor({ modelo, backend }, alAvanzar) {
+export function cargarMotor({ modelo, backend }, alAvanzar) {
   const ya = motorListo(modelo, backend);
-  if (ya) return ya;
-  if (cargando) await cargando.catch(() => {});
-  const lib = await modulo();
-  if (motor) { await motor.liberar(); motor = null; }
-  cargando = (async () => {
+  if (ya) return Promise.resolve(ya);
+  return enTurno(async () => {
+    const listo = motorListo(modelo, backend); // pudo quedar listo mientras esperaba el turno
+    if (listo) return listo;
+    const lib = await modulo();
+    if (motor) { await motor.liberar(); motor = null; }
     marcar({ modelo, backend });
-    const m = await lib.Supertonic.cargar(modelo, { backend, alAvanzar });
-    m.pedido = backend;
     try {
-      await m.sintetizar('Hola.', 'es', 'F1', { pasos: 2 });
-    } catch (e) {
-      // Si la prueba falla (la gráfica sigue caída), se suelta lo cargado para no dejar memoria tomada.
-      await m.liberar().catch(() => {});
-      throw e;
+      const m = await lib.Supertonic.cargar(modelo, { backend, alAvanzar });
+      m.pedido = backend;
+      try {
+        await m.sintetizar('Hola.', 'es', 'F1', { pasos: 2 });
+      } catch (e) {
+        // Si la prueba falla (la gráfica sigue caída), se suelta lo cargado para no dejar memoria tomada.
+        await m.liberar().catch(() => {});
+        throw e;
+      }
+      try { await navigator.storage?.persist?.(); } catch { /* opcional */ }
+      motor = m;
+      return m;
+    } finally {
+      marcar(null);
     }
-    marcar(null);
-    try { await navigator.storage?.persist?.(); } catch { /* opcional */ }
-    motor = m;
-    return m;
-  })();
-  try {
-    return await cargando;
-  } catch (e) {
-    marcar(null);
-    throw e;
-  } finally {
-    cargando = null;
-  }
+  });
 }
 
 // Suelta el motor para que la próxima generación lo vuelva a cargar desde el caché.
 // Sirve cuando la tarjeta gráfica falla a mitad de camino (iPhone: "map async was not successful").
-export async function reiniciarMotor() {
-  if (cargando) await cargando.catch(() => {});
-  if (motor) { try { await motor.liberar(); } catch { /* ya liberado */ } motor = null; }
+export function reiniciarMotor() {
+  return enTurno(async () => {
+    if (motor) { try { await motor.liberar(); } catch { /* ya liberado */ } motor = null; }
+  });
 }
 
-export async function borrarVoces() {
-  if (motor) { await motor.liberar(); motor = null; }
-  return (await modulo()).borrarDescargas();
+export function borrarVoces() {
+  return enTurno(async () => {
+    if (motor) { await motor.liberar(); motor = null; }
+    return (await modulo()).borrarDescargas();
+  });
 }
 
 // Igual que en la página de prueba: si Safari cierra la página mientras carga el

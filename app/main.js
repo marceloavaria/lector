@@ -1,8 +1,8 @@
 import { listarDocs, leerDoc, leerContenido, guardarDocumento, actualizarDoc, borrarDocumento } from './db.js?v=1';
 import { importarArchivo, importarTextoPegado } from './importar.js?v=1';
-import { Reproductor } from './lectura.js?v=5';
-import { ajustesVoz, guardarAjustesVoz, cargarMotor, estaDescargado, borrarVoces, caidaAnterior, modulo } from './voz.js?v=3';
-import { anotar, textoRegistro, borrarRegistro, cantidadEventos } from './registro.js?v=1';
+import { Reproductor } from './lectura.js?v=6';
+import { ajustesVoz, guardarAjustesVoz, cargarMotor, estaDescargado, borrarVoces, caidaAnterior, modulo } from './voz.js?v=4';
+import { anotar, textoRegistro, borrarRegistro, cantidadEventos } from './registro.js?v=2';
 import {
   sincronizar, configuracion, guardarConfiguracion, desconectar, probarConexion, ultimaSync,
   registrarBorrado, quitarBorrado, REPO_POR_DEFECTO, URL_CREAR_CLAVE,
@@ -876,25 +876,33 @@ async function iniciar() {
   conectar();
   ajustes = await ajustesVoz();
   anotar('inicio-app', {
-    version: 6,
+    version: 8,
     modo: matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'icono' : 'pestaña',
     modelo: ajustes.modelo,
     backend: ajustes.backend,
   }, { urgente: true });
 
-  // Una versión anterior guardaba "Solo procesador" después de dos fallos de la tarjeta
-  // gráfica y la app quedaba lenta para siempre. Una sola vez, se vuelve a "Automático".
-  if (!ajustes.migracionGpu) {
-    ajustes = await guardarAjustesVoz({ migracionGpu: 1, ...(ajustes.backend === 'cpu' ? { backend: 'auto' } : {}) });
+  // Versiones anteriores guardaban "Solo procesador" sin que lo eligieras (tras dos fallos de
+  // la tarjeta gráfica, o si la página se recargaba mientras cargaba la voz). Se corrige una
+  // vez por cada una de esas versiones.
+  if ((ajustes.migracionGpu || 0) < 2) {
+    ajustes = await guardarAjustesVoz({ migracionGpu: 2, ...(ajustes.backend === 'cpu' ? { backend: 'auto' } : {}) });
   }
 
+  // La página se cerró mientras cargaba la voz. Con el modelo grande es memoria y se cambia al
+  // Supertonic 2. Con los demás puede ser memoria o solo una recarga: por esta vez se usa el
+  // procesador (gasta menos memoria), sin guardarlo; al volver a la app se intenta la gráfica.
   const caida = caidaAnterior();
   if (caida) {
-    const cambios = caida.modelo === 'v3' ? { modelo: 'v2' } : caida.backend !== 'cpu' ? { backend: 'cpu' } : {};
-    ajustes = await guardarAjustesVoz(cambios);
-    mostrarError('#error-biblioteca', new Error(
-      `La última vez la app se cerró mientras preparaba la voz, probablemente por falta de memoria. ${cambios.modelo ? 'Cambié al modelo Supertonic 2.' : cambios.backend ? 'Cambié a "Solo procesador", que usa menos memoria.' : 'Avísame en el chat.'}`,
-    ));
+    anotar('caida-al-cargar', { modelo: caida.modelo, backend: caida.backend }, { urgente: true });
+    if (caida.modelo === 'v3') {
+      ajustes = await guardarAjustesVoz({ modelo: 'v2' });
+      mostrarError('#error-biblioteca', new Error(
+        'La última vez la app se cerró mientras preparaba el modelo grande, probablemente por falta de memoria. Cambié a Supertonic 2.',
+      ));
+    } else if (caida.backend !== 'cpu') {
+      reproductor.respaldoCpu = true;
+    }
   }
 
   cargarNombresVoces().catch(() => {});
@@ -906,7 +914,8 @@ async function iniciar() {
 
   // Con la voz ya descargada, se carga en segundo plano para que "Seguir escuchando" parta al tiro.
   if (await estaDescargado(ajustes.modelo).catch(() => false)) {
-    setTimeout(() => cargarMotor(ajustes).catch(() => {}), 1500);
+    const backend = reproductor.respaldoCpu ? 'cpu' : ajustes.backend;
+    setTimeout(() => cargarMotor({ modelo: ajustes.modelo, backend }).catch(() => {}), 1500);
   }
 }
 

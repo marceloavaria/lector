@@ -112,7 +112,11 @@ export function textoRegistro(contexto = '') {
     if (!sesiones.has(e.s)) sesiones.set(e.s, []);
     sesiones.get(e.s).push(e);
   }
-  for (const evs of [...sesiones.values()].slice(-4)) L.push('', ...resumirSesion(evs));
+  // Solo se resumen las sesiones en que algo sonó; las demás (abrir y cerrar) se cuentan.
+  const conAudio = [...sesiones.values()].filter((evs) => evs.some((e) => e.tipo === 'play'));
+  const sinAudio = sesiones.size - conAudio.length;
+  for (const evs of conAudio.slice(-4)) L.push('', ...resumirSesion(evs));
+  if (sinAudio) L.push('', `Aperturas sin escuchar: ${sinAudio}`);
   L.push('', 'Eventos (máx. 250, los más recientes al final):');
   L.push(...eventos.slice(-250).map(linea));
   return L.join('\n');

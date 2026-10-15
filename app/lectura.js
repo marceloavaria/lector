@@ -2,9 +2,9 @@
 // encadena los audios en un solo elemento <audio> (así sigue sonando con otra app en
 // pantalla) y avisa qué oración está sonando para resaltarla y guardarla.
 
-import { cargarMotor, modulo, motorListo, reiniciarMotor } from './voz.js?v=3';
+import { cargarMotor, modulo, motorListo, reiniciarMotor } from './voz.js?v=4';
 import { actualizarDoc } from './db.js?v=1';
-import { anotar } from './registro.js?v=1';
+import { anotar } from './registro.js?v=2';
 
 const BUFFER_SEG = 90;     // segundos de audio generados por delante
 const MAX_ADELANTE = 60;   // oraciones generadas por delante, como tope
@@ -51,6 +51,7 @@ export class Reproductor extends EventTarget {
     this.silencio = silencioUrl();
     this.ignorarPausaHasta = 0;
     this.respaldoCpu = false;   // la gráfica falló: se genera con el procesador hasta volver a la app
+    this.reintentos = new Set(); // oraciones cuyo audio ya se regeneró una vez por no poder sonar
     this.espera = null;         // { tipo: 'arranque' | 'corte' | 'salto' | 'ajuste', t } mientras no hay audio
     this.metrica = { n: 0, audio: 0, gen: 0, backend: '' };
 
@@ -102,6 +103,7 @@ export class Reproductor extends EventTarget {
     this.velocidad = ajustes.velocidad || 1;
     this.actual = Math.max(0, Math.min(doc.oracion || 0, this.total - 1));
     this.cambioPosicion = doc.progresoT || 0;
+    this.reintentos = new Set();
     this.enAudio = -1;
     this.finParrafo = new Set(contenido.parrafos.slice(1).map((p) => p - 1));
     this.finParrafo.add(this.total - 1);
@@ -142,7 +144,7 @@ export class Reproductor extends EventTarget {
     this.sonando = true;
     anotar('play', { motivo: 'tú', oracion: this.actual });
     if (this.enAudio === this.actual && this.audio.src && !this.audio.ended) {
-      this.audio.play().catch((e) => this.#fallo(e));
+      this.audio.play().catch((e) => this.#falloAlSonar(e, this.actual));
       this.#estado('sonando');
       this.#llenar();
       return;
@@ -342,13 +344,36 @@ export class Reproductor extends EventTarget {
     this.#estado('cargando-voz');
   }
 
-  #fallo(e) {
+  // `donde`: en qué parte falló (cargar, generar, sonar, ciclo), para el registro del viaje.
+  #fallo(e, donde = '') {
     if (e?.name === 'AbortError') return;
-    anotar('error', { msg: String(e?.message || e).slice(0, 160) }, { urgente: true });
+    anotar('error', { donde, nombre: e?.name || '', msg: String(e?.message || e).slice(0, 160) }, { urgente: true });
     this.sonando = false;
     this.espera = null;
     this.#estado('pausa');
     this.#emitir('error', e);
+  }
+
+  // Un audio ya generado que no se pudo reproducir ("The operation is not supported"): se
+  // vuelve a generar esa oración una vez en vez de detener la lectura.
+  #falloAlSonar(e, i) {
+    if (e?.name === 'AbortError') return;
+    if (e?.name !== 'NotSupportedError' || this.reintentos.has(i)) {
+      this.#fallo(e, 'sonar');
+      return;
+    }
+    this.reintentos.add(i);
+    anotar('audio-reintento', { oracion: i, msg: String(e?.message || e).slice(0, 80) }, { urgente: true });
+    const c = this.listos.get(i);
+    if (c) {
+      this.listos.delete(i);
+      if (this.enAudio !== i) URL.revokeObjectURL(c.url);
+    }
+    if (i !== this.actual || !this.sonando) return;
+    this.enAudio = -1;
+    this.espera = { tipo: 'reintento', t: Date.now() };
+    this.#estado('generando');
+    this.#llenar();
   }
 
   #reproducir(i) {
@@ -371,7 +396,7 @@ export class Reproductor extends EventTarget {
     this.#cambiarFuente(c.url, i);
     this.audio.defaultPlaybackRate = this.velocidad;
     this.audio.playbackRate = this.velocidad;
-    this.audio.play().catch((e) => this.#fallo(e));
+    this.audio.play().catch((e) => this.#falloAlSonar(e, i));
     this.#estado('sonando');
     this.#mediaSession();
     this.#podar();
@@ -442,7 +467,13 @@ export class Reproductor extends EventTarget {
           const t0 = Date.now();
           const listo = motorListo(modelo, backend);
           motor = await cargarMotor({ modelo, backend }, (p) => this.#emitir('voz', p));
-          if (!listo) anotar('motor-cargado', { backend: motor.backend, seg: Math.round((Date.now() - t0) / 100) / 10 });
+          if (!listo) {
+            anotar('motor-cargado', {
+              backend: motor.backend,
+              seg: Math.round((Date.now() - t0) / 100) / 10,
+              ...(motor.motivoWasm ? { sinGrafica: motor.motivoWasm.slice(0, 100) } : {}),
+            });
+          }
         } catch (e) {
           // Recargar el motor también prueba la gráfica: si sigue caída, cuenta como otro fallo.
           if (backend !== 'cpu' && esFalloGpu(e)) {
@@ -450,7 +481,7 @@ export class Reproductor extends EventTarget {
             await esperar(500);
             continue;
           }
-          this.#fallo(e);
+          this.#fallo(e, 'cargar');
           return;
         }
         const st = await modulo();
@@ -460,7 +491,9 @@ export class Reproductor extends EventTarget {
           r = await motor.sintetizar(this.contenido.oraciones[i], this.doc.idioma, voz, { pasos });
         } catch (e) {
           if (epoca !== this.epoca || !this.doc) continue;
-          if (!esFalloGpu(e) || motor.backend !== 'webgpu') { this.#fallo(e); return; }
+          // Se soltó el motor para cargar otro (cambio de voz, respaldo): se usa el nuevo.
+          if (e?.name === 'MotorLiberado') continue;
+          if (!esFalloGpu(e) || motor.backend !== 'webgpu') { this.#fallo(e, 'generar'); return; }
           this.#falloGpu(e, 'al generar');
           await reiniciarMotor();
           continue;
@@ -476,7 +509,7 @@ export class Reproductor extends EventTarget {
         if (i === this.actual && this.enAudio !== i && this.sonando) this.#reproducir(i);
       }
     } catch (e) {
-      this.#fallo(e);
+      this.#fallo(e, 'ciclo');
     } finally {
       this.generando = false;
     }

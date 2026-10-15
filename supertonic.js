@@ -185,18 +185,25 @@ export class Supertonic {
 
     let sesiones;
     let usado = backend === 'cpu' ? 'wasm' : 'webgpu';
-    if (usado === 'webgpu' && !navigator.gpu) usado = 'wasm';
+    let motivoWasm = '';
+    if (usado === 'webgpu' && !navigator.gpu) {
+      usado = 'wasm';
+      motivoWasm = 'el navegador no tiene WebGPU';
+    }
     try {
       sesiones = await intentar(usado);
     } catch (e) {
       if (usado !== 'webgpu') throw e;
       console.warn('WebGPU falló, se usa WASM', e);
+      motivoWasm = String(e?.message || e);
       bytes = 0;
       usado = 'wasm';
       sesiones = await intentar('wasm');
     }
 
-    return new Supertonic(modeloId, cfg, indexer, sesiones, usado);
+    const m = new Supertonic(modeloId, cfg, indexer, sesiones, usado);
+    m.motivoWasm = motivoWasm; // por qué no se usó la tarjeta gráfica, para el registro
+    return m;
   }
 
   constructor(modeloId, cfg, indexer, sesiones, backend) {
@@ -210,7 +217,10 @@ export class Supertonic {
   }
 
   // Suelta la memoria del modelo (también la de la tarjeta gráfica) antes de cargar otro.
+  // Espera a que termine la generación en curso para no soltarle el modelo a mitad.
   async liberar() {
+    this.liberado = true;
+    await (this.cola || Promise.resolve());
     for (const sesion of Object.values(this.s)) {
       try { await sesion.release(); } catch { /* ya liberada */ }
     }
@@ -237,6 +247,11 @@ export class Supertonic {
   }
 
   async #generar(texto, lang, codigoVoz, { pasos = 8, velocidad = 1.05 } = {}) {
+    if (this.liberado) {
+      const e = new Error('El motor de voz se soltó para cargar otro.');
+      e.name = 'MotorLiberado';
+      throw e;
+    }
     const estilo = await this.estilo(codigoVoz);
     const proc = preprocesar(texto, lang);
     const T = proc.length;
