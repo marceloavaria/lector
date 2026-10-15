@@ -3,216 +3,489 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Lector</title>
+  <title>Marshalls Lector</title>
   <meta name="description" content="Escucha tus libros y PDFs con voz natural generada en tu propio dispositivo.">
-  <meta name="theme-color" content="#1f3a5f">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0a0e17">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="Lector">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Marshalls Lector">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="../icon-180.png">
   <link rel="icon" href="../icon-192.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.18/index.css">
   <style>
     :root {
-      --fondo: #f6f5f2;
-      --tarjeta: #ffffff;
-      --texto: #1d1d1f;
-      --suave: #6e6e73;
-      --borde: #e3e1dc;
-      --acento: #1f5fae;
+      --fondo: #0a0e17;
+      --fondo-2: #0f1522;
+      --tarjeta: #141a28;
+      --tarjeta-2: #1b2334;
+      --borde: #232b3d;
+      --texto: #f3f5f9;
+      --suave: #8a93a8;
+      --acento: #2f6bff;
+      --acento-fuerte: #4f83ff;
       --acento-texto: #ffffff;
-      --resaltado: #ffe9a8;
-      --error: #b3261e;
-      --error-fondo: #fdecea;
-      --sombra: 0 -4px 18px rgba(0, 0, 0, .06);
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --fondo: #111214;
-        --tarjeta: #1c1d20;
-        --texto: #f2f2f4;
-        --suave: #a1a1a8;
-        --borde: #2e3035;
-        --acento: #5b9cf0;
-        --acento-texto: #0b1220;
-        --resaltado: #4a3f14;
-        --error: #ff8a80;
-        --error-fondo: #3a1a18;
-        --sombra: 0 -4px 18px rgba(0, 0, 0, .4);
-      }
+      --morado: #7b61ff;
+      --resaltado: rgba(79, 131, 255, .22);
+      --error: #ff7b7b;
+      --error-fondo: #35191f;
+      --radio: 16px;
+      --sombra: 0 -8px 30px rgba(0, 0, 0, .45);
+      --tabs-alto: 64px;
+      --fuente: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body { margin: 0; background: var(--fondo); color: var(--texto); }
-    body { font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-text-size-adjust: 100%; }
+    body {
+      font: 16px/1.45 var(--fuente); -webkit-text-size-adjust: 100%;
+      font-feature-settings: "cv11", "ss01";
+    }
     button { font: inherit; color: inherit; cursor: pointer; }
     [hidden] { display: none !important; }
+    a { color: var(--acento-fuerte); }
+    svg { flex: none; }
 
     .contenedor { max-width: 680px; margin: 0 auto; padding: 0 16px; }
+    .vista { padding-bottom: calc(var(--tabs-alto) + 24px + env(safe-area-inset-bottom)); min-height: 100vh; }
+    .vista.sin-tabs { padding-bottom: 0; }
+    body.con-mini .vista:not(.sin-tabs) { padding-bottom: calc(var(--tabs-alto) + 104px + env(safe-area-inset-bottom)); }
+
+    /* ---------- barras ---------- */
     .barra {
       position: sticky; top: 0; z-index: 5;
       display: flex; align-items: center; gap: 10px;
-      padding: max(10px, env(safe-area-inset-top)) 16px 10px;
-      background: var(--fondo);
-      border-bottom: 1px solid var(--borde);
+      padding: max(14px, env(safe-area-inset-top)) 16px 12px;
+      background: rgba(10, 14, 23, .85); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
     }
-    .barra h1 { font-size: 1.35rem; margin: 0; flex: 1; }
+    .barra .contenedor { display: flex; align-items: center; gap: 10px; width: 100%; padding: 0; }
+    .barra h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -.02em; margin: 0; flex: 1; }
+    .marca { display: flex; align-items: center; gap: 10px; flex: 1; font-weight: 700; font-size: 1.25rem; letter-spacing: -.02em; }
+    .marca svg { color: var(--acento-fuerte); }
+
+    .icono {
+      border: 0; background: var(--tarjeta); width: 40px; height: 40px; border-radius: 12px;
+      display: grid; place-items: center; color: var(--texto); padding: 0;
+    }
+    .icono svg { width: 20px; height: 20px; }
+    .icono.texto { width: auto; padding: 0 12px; font-weight: 600; font-size: .9rem; color: var(--acento-fuerte); }
+
     .boton {
-      border: 0; border-radius: 12px; padding: 12px 16px; font-weight: 600;
+      border: 0; border-radius: 14px; padding: 14px 18px; font-weight: 600;
       background: var(--acento); color: var(--acento-texto);
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      transition: background-color .15s, transform .1s;
     }
-    .boton.suave { background: transparent; color: var(--acento); border: 1px solid var(--borde); }
+    .boton:active { transform: scale(.985); }
+    .boton.suave { background: var(--tarjeta-2); color: var(--texto); }
     .boton.peligro { background: transparent; color: var(--error); border: 1px solid var(--borde); }
     .boton:disabled { opacity: .45; cursor: default; }
-    .ancho { display: block; width: 100%; margin-top: 10px; }
-    .icono { border: 0; background: transparent; padding: 8px; border-radius: 10px; color: var(--acento); font-weight: 600; }
+    .ancho { display: flex; width: 100%; margin-top: 10px; }
 
-    .aviso { background: var(--tarjeta); border: 1px solid var(--acento); border-radius: 14px; padding: 14px; margin: 16px 0; }
-    .aviso p { margin: 0 0 6px; }
-    .error { background: var(--error-fondo); color: var(--error); border-radius: 12px; padding: 12px; margin: 12px 0; font-size: .95rem; }
+    .error { background: var(--error-fondo); color: var(--error); border-radius: 14px; padding: 12px 14px; margin: 12px 0; font-size: .95rem; }
+    .aviso { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: var(--radio); padding: 16px; margin: 16px 0; }
+    .aviso p { margin: 0 0 8px; color: var(--suave); font-size: .95rem; }
+    .nota { font-size: .85rem; color: var(--suave); margin: 8px 0 0; }
+    h2.subtitulo { font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em; margin: 24px 0 10px; display: flex; align-items: center; justify-content: space-between; }
+    h2.subtitulo .enlace { font-size: .85rem; font-weight: 600; color: var(--acento-fuerte); background: transparent; border: 0; padding: 0; }
 
-    /* Biblioteca */
-    .continuar {
-      margin: 16px 0; padding: 16px; border-radius: 16px;
-      background: var(--acento); color: var(--acento-texto);
-      display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; border: 0;
+    /* ---------- portadas ---------- */
+    .tapa {
+      flex: none; width: 48px; height: 60px; border-radius: 8px; position: relative; overflow: hidden;
+      display: grid; place-items: center; color: #fff;
+      background: linear-gradient(160deg, #2f6bff, #1a3f9e);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
     }
-    .continuar .play-grande { flex: 0 0 52px; height: 52px; border-radius: 50%; background: var(--acento-texto); color: var(--acento); display: grid; place-items: center; }
-    .continuar .etiqueta, .continuar .titulo, .continuar .detalle { display: block; }
-    .continuar .etiqueta { font-size: .8rem; opacity: .85; text-transform: uppercase; letter-spacing: .04em; }
-    .continuar .titulo { font-weight: 700; font-size: 1.1rem; margin: 2px 0; }
-    .continuar .detalle { font-size: .9rem; opacity: .9; }
-    h2.subtitulo { font-size: .85rem; color: var(--suave); text-transform: uppercase; letter-spacing: .05em; margin: 20px 0 8px; }
-    ul.lista { list-style: none; margin: 0 0 40px; padding: 0; }
+    .tapa::after { content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,.18); }
+    .tapa.epub { background: linear-gradient(160deg, #8b6cff, #4a2fb8); }
+    .tapa.texto { background: linear-gradient(160deg, #3b4a66, #1f2838); }
+    .tapa svg { width: 22px; height: 22px; opacity: .95; }
+    .tapa.grande { width: 120px; height: 156px; border-radius: 14px; box-shadow: 0 18px 40px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.1); }
+    .tapa.grande svg { width: 44px; height: 44px; }
+    .tapa.grande::after { left: 12px; }
+
+    /* ---------- inicio ---------- */
+    .estado-sync {
+      border: 0; background: var(--tarjeta); color: var(--suave); border-radius: 999px;
+      padding: 8px 12px; font-size: .8rem; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; max-width: 55vw;
+    }
+    .estado-sync span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .estado-sync::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--suave); flex: none; }
+    .estado-sync.ok::before { background: #3ddc84; }
+    .estado-sync.error-sync { color: var(--error); }
+    .estado-sync.error-sync::before { background: var(--error); }
+
+    .hero {
+      position: relative; overflow: hidden; margin: 16px 0 8px; padding: 20px; border-radius: 22px; width: 100%; border: 0; text-align: left;
+      background: linear-gradient(135deg, #1b48d6 0%, #2f6bff 55%, #6b4dff 100%); color: #fff;
+      display: flex; align-items: center; gap: 16px;
+      box-shadow: 0 16px 40px rgba(47, 107, 255, .28);
+    }
+    .hero::before { content: ""; position: absolute; right: -60px; top: -80px; width: 220px; height: 220px; border-radius: 50%; background: rgba(255,255,255,.14); filter: blur(30px); }
+    .hero .tapa { box-shadow: 0 10px 24px rgba(0,0,0,.35); background: rgba(255,255,255,.16); }
+    .hero .tapa::after { display: none; }
+    .hero .cuerpo { flex: 1; min-width: 0; }
+    .hero .etiqueta { display: block; font-size: .75rem; font-weight: 600; opacity: .85; text-transform: uppercase; letter-spacing: .08em; }
+    .hero .titulo { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-weight: 700; font-size: 1.15rem; line-height: 1.25; margin: 4px 0 2px; overflow: hidden; letter-spacing: -.01em; }
+    .hero .detalle { display: block; font-size: .85rem; opacity: .9; }
+    .hero .barra-h { height: 4px; background: rgba(255,255,255,.25); border-radius: 2px; margin-top: 12px; overflow: hidden; }
+    .hero .barra-h > div { height: 100%; background: #fff; border-radius: 2px; }
+    .hero .play-grande { flex: none; width: 56px; height: 56px; border-radius: 50%; background: #fff; color: var(--acento); display: grid; place-items: center; box-shadow: 0 8px 20px rgba(0,0,0,.25); }
+    .hero .play-grande svg { width: 26px; height: 26px; margin-left: 3px; }
+
+    .vacia { text-align: center; color: var(--suave); padding: 36px 20px; background: var(--tarjeta); border-radius: var(--radio); margin: 16px 0; }
+    .vacia .logo-grande { color: var(--acento-fuerte); margin-bottom: 10px; }
+    .vacia h3 { color: var(--texto); margin: 0 0 6px; font-size: 1.15rem; letter-spacing: -.01em; }
+    .vacia p { margin: 0 0 16px; }
+
+    /* ---------- listas ---------- */
+    ul.lista { list-style: none; margin: 0 0 8px; padding: 0; }
     ul.lista li {
       display: flex; align-items: center; gap: 12px;
-      background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 14px;
-      padding: 12px 8px 12px 14px; margin-bottom: 10px;
+      background: var(--tarjeta); border-radius: var(--radio);
+      padding: 10px 6px 10px 10px; margin-bottom: 8px;
     }
-    .doc-abrir { flex: 1; min-width: 0; border: 0; background: transparent; text-align: left; padding: 0; }
-    .doc-titulo { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .doc-meta { color: var(--suave); font-size: .85rem; margin-top: 2px; }
-    .progreso { height: 4px; background: var(--borde); border-radius: 2px; margin-top: 8px; overflow: hidden; }
-    .progreso > div { height: 100%; background: var(--acento); }
-    .vacia { text-align: center; color: var(--suave); padding: 40px 16px; }
+    .doc-abrir { flex: 1; min-width: 0; border: 0; background: transparent; text-align: left; padding: 0; display: flex; align-items: center; gap: 12px; color: inherit; }
+    .doc-cuerpo { flex: 1; min-width: 0; }
+    .doc-titulo { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: -.01em; }
+    .doc-meta { color: var(--suave); font-size: .82rem; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .progreso { height: 3px; background: var(--borde); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+    .progreso > div { height: 100%; background: var(--acento-fuerte); border-radius: 2px; }
+    .doc-mas { border: 0; background: transparent; width: 40px; height: 40px; border-radius: 10px; color: var(--suave); display: grid; place-items: center; }
+    .doc-mas svg { width: 20px; height: 20px; }
 
-    /* Lector */
-    .lector-barra { gap: 6px; }
-    .lector-barra .titulos { flex: 1; min-width: 0; }
-    #lector-titulo { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chips { display: flex; gap: 8px; margin: 4px 0 14px; overflow-x: auto; scrollbar-width: none; }
+    .chips::-webkit-scrollbar { display: none; }
+    .chip-filtro { flex: none; border: 0; border-radius: 999px; padding: 8px 14px; font-size: .85rem; font-weight: 600; background: var(--tarjeta); color: var(--suave); }
+    .chip-filtro.activo { background: var(--acento); color: #fff; }
+
+    /* ---------- importar ---------- */
+    .intro h1 { font-size: 1.7rem; letter-spacing: -.03em; margin: 8px 0 6px; line-height: 1.15; }
+    .intro p { color: var(--suave); margin: 0 0 18px; }
+    .fuentes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .fuente {
+      border: 0; border-radius: 18px; background: var(--tarjeta); padding: 18px 14px 16px; text-align: left; color: inherit;
+      display: flex; flex-direction: column; gap: 12px; min-height: 130px; transition: background-color .15s;
+    }
+    .fuente:active { background: var(--tarjeta-2); }
+    .fuente .ico { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: rgba(47,107,255,.18); color: var(--acento-fuerte); }
+    .fuente .ico.morado { background: rgba(123,97,255,.18); color: #a894ff; }
+    .fuente .ico svg { width: 22px; height: 22px; }
+    .fuente b { display: block; font-size: 1rem; letter-spacing: -.01em; }
+    .fuente small { color: var(--suave); font-size: .8rem; }
+
+    /* ---------- vista previa ---------- */
+    .previa-cabecera { text-align: center; padding: 8px 0 18px; }
+    .previa-cabecera .tapa { margin: 8px auto 18px; }
+    .previa-cabecera h2 { margin: 0; font-size: 1.35rem; letter-spacing: -.02em; line-height: 1.25; }
+    .previa-cabecera p { margin: 6px 0 0; color: var(--suave); font-size: .9rem; }
+    .panel { background: var(--tarjeta); border-radius: var(--radio); overflow: hidden; margin: 12px 0; }
+    .fila-ajuste {
+      display: flex; align-items: center; gap: 12px; width: 100%; border: 0; background: transparent; color: inherit;
+      padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--borde);
+    }
+    .fila-ajuste:last-child { border-bottom: 0; }
+    .fila-ajuste .ico { color: var(--suave); display: grid; }
+    .fila-ajuste .ico svg { width: 20px; height: 20px; }
+    .fila-ajuste .nombre { flex: 1; font-weight: 500; }
+    .fila-ajuste .valor { color: var(--suave); display: flex; align-items: center; gap: 4px; }
+    .fila-ajuste .valor svg { width: 16px; height: 16px; }
+    .previa-progreso { padding: 14px 16px; }
+    .previa-progreso .texto-p { display: flex; justify-content: space-between; font-size: .85rem; color: var(--suave); margin-bottom: 8px; }
+    details.secciones summary { list-style: none; cursor: pointer; }
+    details.secciones summary::-webkit-details-marker { display: none; }
+    details.secciones ol { margin: 0; padding: 0 0 8px; list-style: none; max-height: 320px; overflow: auto; }
+    details.secciones li button { width: 100%; border: 0; background: transparent; color: var(--texto); text-align: left; padding: 10px 16px 10px 48px; font-size: .92rem; border-top: 1px solid var(--borde); }
+    details.secciones li button:active { background: var(--tarjeta-2); }
+    .pie-fijo {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+      padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+      background: linear-gradient(to top, var(--fondo) 70%, transparent);
+    }
+    .pie-fijo .contenedor { padding: 0; display: flex; gap: 10px; }
+    .pie-fijo .boton { flex: 1; padding: 16px; font-size: 1.05rem; border-radius: 16px; }
+    .vista.con-pie { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+
+    /* ---------- lector ---------- */
+    .lector-barra .titulos { flex: 1; min-width: 0; text-align: center; }
+    #lector-titulo { font-weight: 600; font-size: .95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: -.01em; }
     #secciones {
-      max-width: 100%; margin-top: 2px; font: inherit; font-size: .85rem; color: var(--suave);
+      max-width: 100%; margin-top: 1px; font: inherit; font-size: .8rem; color: var(--suave);
       background: transparent; border: 0; padding: 0; -webkit-appearance: none; appearance: none;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center;
     }
     #texto {
-      font: 19px/1.7 ui-serif, "New York", Georgia, "Times New Roman", serif;
-      padding-top: 8px; padding-bottom: calc(190px + env(safe-area-inset-bottom));
+      font: 19px/1.75 var(--fuente); letter-spacing: -.005em;
+      padding-top: 10px; padding-bottom: calc(230px + env(safe-area-inset-bottom));
     }
-    #texto p { margin: 0 0 1em; }
-    #texto .o { border-radius: 4px; transition: background-color .2s; }
-    #texto .o.actual { background: var(--resaltado); box-shadow: 0 0 0 2px var(--resaltado); }
-    #texto h3.seccion { font: 600 .85rem/1.3 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--suave); text-transform: uppercase; letter-spacing: .05em; margin: 12px 0 18px; }
+    #texto p { margin: 0 0 1.1em; color: #d9deea; }
+    #texto .o { border-radius: 5px; transition: background-color .2s, color .2s; padding: 1px 0; }
+    #texto .o.actual { background: var(--resaltado); box-shadow: 0 0 0 3px var(--resaltado); color: #fff; }
+    #texto h3.seccion { font: 600 .8rem/1.3 var(--fuente); color: var(--acento-fuerte); text-transform: uppercase; letter-spacing: .08em; margin: 14px 0 18px; }
     .navegar-seccion { display: flex; gap: 10px; margin: 8px 0 24px; }
     .navegar-seccion .boton { flex: 1; }
     #btn-seguir {
       position: fixed; left: 50%; transform: translateX(-50%);
-      bottom: calc(150px + env(safe-area-inset-bottom)); z-index: 6;
-      border: 0; border-radius: 999px; padding: 10px 16px; font-weight: 600;
-      background: var(--texto); color: var(--fondo); box-shadow: 0 4px 14px rgba(0,0,0,.2);
+      bottom: calc(190px + env(safe-area-inset-bottom)); z-index: 6;
+      border: 0; border-radius: 999px; padding: 10px 16px; font-weight: 600; font-size: .9rem;
+      background: var(--texto); color: var(--fondo); box-shadow: 0 6px 18px rgba(0,0,0,.4);
     }
     .reproductor {
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
-      background: var(--tarjeta); border-top: 1px solid var(--borde); box-shadow: var(--sombra);
-      padding: 10px 16px calc(12px + env(safe-area-inset-bottom));
+      background: rgba(15, 21, 34, .92); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      border-top: 1px solid var(--borde); box-shadow: var(--sombra);
+      border-radius: 22px 22px 0 0;
+      padding: 14px 20px calc(14px + env(safe-area-inset-bottom));
     }
     .reproductor .contenedor { padding: 0; }
-    .rep-info { display: flex; justify-content: space-between; gap: 10px; font-size: .85rem; color: var(--suave); }
-    #rep-estado { min-height: 1.2em; font-size: .85rem; color: var(--acento); margin-top: 2px; }
-    .controles { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
-    .control { border: 0; background: transparent; width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; color: var(--texto); }
-    .control svg { width: 28px; height: 28px; }
-    #btn-play { width: 66px; height: 66px; background: var(--acento); color: var(--acento-texto); }
-    #btn-play svg { width: 30px; height: 30px; }
-    .chip { border: 1px solid var(--borde); background: transparent; border-radius: 999px; padding: 8px 12px; font-weight: 600; min-width: 64px; }
+    .rep-info { display: flex; justify-content: space-between; gap: 10px; font-size: .8rem; color: var(--suave); }
+    #rep-seccion { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #rep-progreso { flex: none; }
+    .rep-barra { position: relative; height: 4px; background: var(--borde); border-radius: 2px; margin: 10px 0 4px; overflow: hidden; }
+    .rep-barra > div { height: 100%; background: var(--acento-fuerte); border-radius: 2px; width: 0; transition: width .3s; }
+    #rep-estado { min-height: 1.2em; font-size: .8rem; color: var(--acento-fuerte); text-align: center; }
+    .controles { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+    .control { border: 0; background: transparent; width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; color: var(--texto); }
+    .control svg { width: 30px; height: 30px; }
+    #btn-play { width: 72px; height: 72px; background: var(--acento); color: var(--acento-texto); box-shadow: 0 10px 24px rgba(47,107,255,.35); }
+    #btn-play svg { width: 32px; height: 32px; }
+    #btn-play #icono-play { margin-left: 4px; }
+    .chip { border: 0; background: var(--tarjeta-2); border-radius: 999px; padding: 9px 12px; font-weight: 600; font-size: .85rem; min-width: 58px; }
 
-    /* Diálogos */
+    /* ---------- voz ---------- */
+    .voces { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .voz-op { position: relative; display: flex; align-items: center; gap: 10px; background: var(--tarjeta); border-radius: 14px; padding: 12px; cursor: pointer; border: 1px solid transparent; }
+    .voz-op input { position: absolute; opacity: 0; pointer-events: none; }
+    .voz-op:has(input:checked) { border-color: var(--acento-fuerte); background: rgba(47,107,255,.12); }
+    .voz-op .avatar { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: .85rem; background: linear-gradient(145deg, #2f6bff, #6b4dff); color: #fff; flex: none; }
+    .voz-op.hombre .avatar { background: linear-gradient(145deg, #1f8f7a, #2f6bff); }
+    .voz-op b { display: block; font-size: .92rem; white-space: nowrap; }
+    .voz-op .check { margin-left: auto; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--borde); display: grid; place-items: center; }
+    .voz-op .check svg { width: 12px; height: 12px; display: none; }
+    .voz-op:has(input:checked) .check { background: var(--acento); border-color: var(--acento); }
+    .voz-op:has(input:checked) .check svg { display: block; }
+    .campo { padding: 12px 16px; border-bottom: 1px solid var(--borde); }
+    .campo:last-child { border-bottom: 0; }
+    .campo label { display: block; font-size: .8rem; color: var(--suave); margin: 0 0 4px; }
+    .campo select { width: 100%; font: inherit; font-size: 1rem; color: var(--texto); background: transparent; border: 0; padding: 0; -webkit-appearance: none; appearance: none; }
+    .campos-2 { display: grid; grid-template-columns: 1fr 1fr; }
+    .campos-2 .campo:first-child { border-right: 1px solid var(--borde); border-bottom: 0; }
+    .acciones-voz { display: flex; gap: 10px; margin-top: 12px; }
+    .acciones-voz .boton { flex: 1; }
+    progress { width: 100%; height: 6px; margin-top: 12px; border: 0; border-radius: 3px; overflow: hidden; background: var(--borde); -webkit-appearance: none; appearance: none; }
+    progress::-webkit-progress-bar { background: var(--borde); }
+    progress::-webkit-progress-value { background: var(--acento-fuerte); }
+    progress::-moz-progress-bar { background: var(--acento-fuerte); }
+
+    /* ---------- mini reproductor y pestañas ---------- */
+    #mini {
+      position: fixed; left: 12px; right: 12px; z-index: 7;
+      bottom: calc(var(--tabs-alto) + 8px + env(safe-area-inset-bottom));
+      display: flex; align-items: center; gap: 10px;
+      background: var(--tarjeta-2); border: 1px solid var(--borde); border-radius: 16px; padding: 8px 8px 8px 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.45);
+    }
+    #mini .mini-abrir { flex: 1; min-width: 0; border: 0; background: transparent; color: inherit; text-align: left; padding: 0; }
+    #mini .mini-titulo { font-weight: 600; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #mini .mini-detalle { font-size: .78rem; color: var(--suave); }
+    #mini .control { width: 44px; height: 44px; background: var(--acento); color: #fff; }
+    #mini .control svg { width: 22px; height: 22px; }
+    @media (min-width: 720px) { #mini { left: 50%; right: auto; width: 640px; transform: translateX(-50%); } }
+
+    .tabs {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 6;
+      background: rgba(10, 14, 23, .9); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      border-top: 1px solid var(--borde);
+      padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    }
+    .tabs .contenedor { display: flex; justify-content: space-around; padding: 0; }
+    .tab { border: 0; background: transparent; color: var(--suave); display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 10px; font-size: .68rem; font-weight: 600; min-width: 64px; border-radius: 12px; }
+    .tab svg { width: 24px; height: 24px; }
+    .tab.activa { color: var(--acento-fuerte); }
+
+    /* ---------- diálogos ---------- */
     dialog {
       width: min(560px, calc(100vw - 24px)); max-height: calc(100vh - 40px);
-      border: 1px solid var(--borde); border-radius: 18px; padding: 18px;
+      border: 1px solid var(--borde); border-radius: 22px; padding: 20px;
       background: var(--tarjeta); color: var(--texto);
     }
-    dialog::backdrop { background: rgba(0, 0, 0, .35); }
-    dialog h2 { margin: 0 0 12px; font-size: 1.2rem; }
-    label { display: block; font-size: .9rem; color: var(--suave); margin: 12px 0 4px; }
-    select, textarea, input[type="text"] {
-      width: 100%; font: inherit; color: var(--texto); background: var(--fondo);
-      border: 1px solid var(--borde); border-radius: 10px; padding: 10px;
+    dialog::backdrop { background: rgba(0, 0, 0, .6); backdrop-filter: blur(4px); }
+    dialog h2 { margin: 0 0 12px; font-size: 1.25rem; letter-spacing: -.02em; }
+    dialog p { color: var(--suave); font-size: .95rem; }
+    label { display: block; font-size: .85rem; color: var(--suave); margin: 12px 0 6px; }
+    textarea, input[type="text"], input[type="password"] {
+      width: 100%; font: inherit; color: var(--texto); background: var(--fondo-2);
+      border: 1px solid var(--borde); border-radius: 12px; padding: 12px;
     }
+    textarea:focus, input:focus { outline: 2px solid var(--acento); outline-offset: 0; border-color: transparent; }
     textarea { min-height: 180px; resize: vertical; }
-    .fila { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    .nota { font-size: .85rem; color: var(--suave); margin: 8px 0 0; }
-    progress { width: 100%; height: 10px; margin-top: 10px; }
     .acciones { display: flex; gap: 10px; margin-top: 16px; }
     .acciones .boton { flex: 1; }
-
-    .estado-sync {
-      display: block; width: 100%; margin-top: 10px; padding: 6px 0;
-      border: 0; background: transparent; text-align: left;
-      font-size: .85rem; color: var(--suave);
-    }
-    .estado-sync.error-sync { color: var(--error); }
-    ol.pasos { padding-left: 20px; margin: 8px 0; }
+    ol.pasos { padding-left: 20px; margin: 8px 0; color: var(--suave); font-size: .92rem; }
     ol.pasos li { margin-bottom: 8px; }
-    a { color: var(--acento); }
+    ol.pasos strong, dialog p strong { color: var(--texto); }
+    code { background: var(--fondo-2); padding: 1px 6px; border-radius: 6px; font-size: .9em; }
+    summary.nota { cursor: pointer; margin-top: 12px; }
 
     #cargando {
       position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
-      background: rgba(0, 0, 0, .35);
+      background: rgba(0, 0, 0, .6); backdrop-filter: blur(4px);
     }
-    #cargando .caja { background: var(--tarjeta); border-radius: 16px; padding: 20px; width: min(360px, calc(100vw - 32px)); text-align: center; }
+    #cargando .caja { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 18px; padding: 22px; width: min(360px, calc(100vw - 32px)); text-align: center; }
+    #cargando p { margin: 0; }
+
+    /* Íconos reutilizables definidos una vez. */
+    .defs { position: absolute; width: 0; height: 0; overflow: hidden; }
   </style>
 </head>
 <body>
 
-<section id="vista-biblioteca">
+<svg class="defs" aria-hidden="true">
+  <defs>
+    <symbol id="i-onda" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M3 12h1m3-4v8m4-11v14m4-9v4m4-7v10m3-5h-1"/></symbol>
+    <symbol id="i-inicio" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h5v-6h4v6h5V10"/></symbol>
+    <symbol id="i-importar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="5"/><path d="M12 8v8M8 12h8"/></symbol>
+    <symbol id="i-biblioteca" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h4v15H4zM10 5h4v15h-4zM16.5 5.5l3.5 1-3 14-3.5-1z"/></symbol>
+    <symbol id="i-voz" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></symbol>
+    <symbol id="i-pausa" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></symbol>
+    <symbol id="i-ant" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></symbol>
+    <symbol id="i-sig" viewBox="0 0 24 24" fill="currentColor"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></symbol>
+    <symbol id="i-volver" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></symbol>
+    <symbol id="i-archivo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 18v-6M9.5 14.5 12 12l2.5 2.5"/></symbol>
+    <symbol id="i-pegar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="12" height="16" rx="2"/><path d="M9 5a3 3 0 0 1 6 0M9 11h6M9 15h4"/></symbol>
+    <symbol id="i-libro" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19a2 2 0 0 1 2-2h13"/></symbol>
+    <symbol id="i-pdf" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M8 13h8M8 17h5"/></symbol>
+    <symbol id="i-texto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14M5 11h14M5 16h9"/></symbol>
+    <symbol id="i-mas" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></symbol>
+    <symbol id="i-idioma" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></symbol>
+    <symbol id="i-velocidad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15a8 8 0 1 1 16 0"/><path d="M12 15l4-5"/><circle cx="12" cy="15" r="1.5" fill="currentColor"/></symbol>
+    <symbol id="i-lista" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></symbol>
+    <symbol id="i-sync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.5-4M4 13a8 8 0 0 0 14.5 4"/><path d="M20 4v7h-7M4 20v-7h7"/></symbol>
+    <symbol id="i-basura" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+  </defs>
+</svg>
+
+<!-- ===== Inicio ===== -->
+<section id="vista-inicio" class="vista">
   <header class="barra">
-    <h1>Lector</h1>
-    <button class="icono" id="btn-ajustes-biblioteca" aria-label="Voz">Voz</button>
-    <button class="boton" id="btn-agregar">+ Agregar</button>
+    <div class="contenedor">
+      <div class="marca"><svg width="28" height="28"><use href="#i-onda"/></svg><span>Marshalls Lector</span></div>
+      <button id="estado-sync" class="estado-sync"><span>Sincronizar</span></button>
+    </div>
   </header>
   <div class="contenedor">
-    <button id="estado-sync" class="estado-sync">Sincronizar entre dispositivos</button>
     <div id="error-biblioteca" class="error" hidden></div>
     <div id="aviso-voz" class="aviso" hidden>
       <p id="aviso-voz-texto"></p>
       <button class="boton ancho" id="btn-descargar-voz">Descargar la voz</button>
     </div>
-    <button id="continuar" class="continuar" hidden>
-      <span class="play-grande" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
-      </span>
-      <span>
+    <button id="continuar" class="hero" hidden>
+      <span class="tapa" id="continuar-tapa"></span>
+      <span class="cuerpo">
         <span class="etiqueta">Seguir escuchando</span>
         <span class="titulo" id="continuar-titulo"></span>
         <span class="detalle" id="continuar-detalle"></span>
+        <span class="barra-h"><div id="continuar-barra"></div></span>
       </span>
+      <span class="play-grande" aria-hidden="true"><svg><use href="#i-play"/></svg></span>
     </button>
-    <h2 class="subtitulo" id="titulo-lista" hidden>Tu biblioteca</h2>
-    <ul class="lista" id="lista"></ul>
+    <h2 class="subtitulo" id="titulo-recientes" hidden><span>Recientes</span><button class="enlace" id="btn-ver-biblioteca">Ver biblioteca ›</button></h2>
+    <ul class="lista" id="lista-recientes"></ul>
     <div class="vacia" id="vacia" hidden>
-      <p>Agrega un PDF, un EPUB o pega un texto para empezar a escuchar.</p>
-      <button class="boton" id="btn-agregar-vacia">+ Agregar</button>
+      <svg class="logo-grande" width="44" height="44"><use href="#i-onda"/></svg>
+      <h3>Convierte cualquier texto en audio</h3>
+      <p>Importa un PDF, un EPUB o pega un texto. Lo escuchas con voz natural, aquí y en el auto.</p>
+      <button class="boton" id="btn-agregar-vacia">Importar</button>
     </div>
   </div>
 </section>
 
-<section id="vista-lector" hidden>
-  <header class="barra lector-barra">
-    <button class="icono" id="btn-volver" aria-label="Biblioteca">‹ Biblioteca</button>
-    <div class="titulos">
-      <div id="lector-titulo"></div>
-      <select id="secciones" aria-label="Ir a la sección"></select>
+<!-- ===== Importar ===== -->
+<section id="vista-importar" class="vista" hidden>
+  <header class="barra"><div class="contenedor"><h1>Importar</h1></div></header>
+  <div class="contenedor intro">
+    <h1>¿Qué quieres escuchar hoy?</h1>
+    <p>Elige de dónde viene el texto. Se procesa en tu dispositivo.</p>
+    <div class="fuentes">
+      <button class="fuente" id="btn-elegir-archivo">
+        <span class="ico"><svg><use href="#i-archivo"/></svg></span>
+        <span><b>Subir archivo</b><small>PDF, EPUB, TXT</small></span>
+      </button>
+      <button class="fuente" id="btn-pegar">
+        <span class="ico morado"><svg><use href="#i-pegar"/></svg></span>
+        <span><b>Pegar texto</b><small>Artículos, correos, apuntes</small></span>
+      </button>
     </div>
-    <button class="icono" id="btn-ajustes" aria-label="Voz">Voz</button>
+    <p class="nota">Los EPUB con protección (DRM), como los comprados en Apple Books o Kindle, no se pueden leer. Los PDF escaneados (fotos de páginas) tampoco, por ahora.</p>
+  </div>
+</section>
+
+<!-- ===== Vista previa ===== -->
+<section id="vista-previa" class="vista sin-tabs con-pie" hidden>
+  <header class="barra">
+    <div class="contenedor">
+      <button class="icono" id="btn-previa-volver" aria-label="Volver"><svg><use href="#i-volver"/></svg></button>
+      <h1 style="font-size:1rem;text-align:center">Vista previa</h1>
+      <button class="icono" id="btn-previa-borrar" aria-label="Borrar"><svg><use href="#i-basura"/></svg></button>
+    </div>
+  </header>
+  <div class="contenedor">
+    <div class="previa-cabecera">
+      <div class="tapa grande" id="previa-tapa"></div>
+      <h2 id="previa-titulo"></h2>
+      <p id="previa-meta"></p>
+    </div>
+    <div class="panel" id="previa-panel-progreso" hidden>
+      <div class="previa-progreso">
+        <div class="texto-p"><span id="previa-progreso-texto"></span><span id="previa-restante"></span></div>
+        <div class="progreso"><div id="previa-barra"></div></div>
+      </div>
+    </div>
+    <div class="panel">
+      <button class="fila-ajuste" id="previa-idioma">
+        <span class="ico"><svg><use href="#i-idioma"/></svg></span>
+        <span class="nombre">Idioma</span>
+        <span class="valor"><span id="previa-idioma-valor"></span><svg><use href="#i-chevron"/></svg></span>
+      </button>
+      <button class="fila-ajuste" id="previa-voz">
+        <span class="ico"><svg><use href="#i-voz"/></svg></span>
+        <span class="nombre">Voz</span>
+        <span class="valor"><span id="previa-voz-valor"></span><svg><use href="#i-chevron"/></svg></span>
+      </button>
+      <button class="fila-ajuste" id="previa-velocidad">
+        <span class="ico"><svg><use href="#i-velocidad"/></svg></span>
+        <span class="nombre">Velocidad</span>
+        <span class="valor"><span id="previa-velocidad-valor"></span><svg><use href="#i-chevron"/></svg></span>
+      </button>
+    </div>
+    <details class="panel secciones" id="previa-secciones">
+      <summary class="fila-ajuste">
+        <span class="ico"><svg><use href="#i-lista"/></svg></span>
+        <span class="nombre" id="previa-secciones-titulo">Secciones</span>
+        <span class="valor"><svg><use href="#i-chevron"/></svg></span>
+      </summary>
+      <ol id="previa-secciones-lista"></ol>
+    </details>
+  </div>
+  <footer class="pie-fijo"><div class="contenedor">
+    <button class="boton" id="btn-escuchar"><span id="btn-escuchar-texto">Escuchar</span><svg width="20" height="20"><use href="#i-chevron"/></svg></button>
+  </div></footer>
+</section>
+
+<!-- ===== Lector ===== -->
+<section id="vista-lector" class="vista sin-tabs" hidden>
+  <header class="barra lector-barra">
+    <div class="contenedor">
+      <button class="icono" id="btn-volver" aria-label="Volver"><svg><use href="#i-volver"/></svg></button>
+      <div class="titulos">
+        <div id="lector-titulo"></div>
+        <select id="secciones" aria-label="Ir a la sección"></select>
+      </div>
+      <button class="icono" id="btn-ajustes" aria-label="Voz"><svg><use href="#i-voz"/></svg></button>
+    </div>
   </header>
   <div class="contenedor">
     <div id="error-lector" class="error" hidden></div>
@@ -222,33 +495,119 @@
   <footer class="reproductor">
     <div class="contenedor">
       <div class="rep-info"><span id="rep-seccion"></span><span id="rep-progreso"></span></div>
+      <div class="rep-barra"><div id="rep-barra"></div></div>
       <div id="rep-estado"></div>
       <div class="controles">
         <button class="chip" id="btn-velocidad" aria-label="Velocidad">1x</button>
-        <button class="control" id="btn-anterior" aria-label="Oración anterior">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
-        </button>
+        <button class="control" id="btn-anterior" aria-label="Oración anterior"><svg><use href="#i-ant"/></svg></button>
         <button class="control" id="btn-play" aria-label="Reproducir">
-          <svg viewBox="0 0 24 24" fill="currentColor" id="icono-play"><path d="M8 5.5v13l11-6.5z"/></svg>
-          <svg viewBox="0 0 24 24" fill="currentColor" id="icono-pausa" hidden><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>
+          <svg id="icono-play"><use href="#i-play"/></svg>
+          <svg id="icono-pausa" hidden><use href="#i-pausa"/></svg>
         </button>
-        <button class="control" id="btn-siguiente" aria-label="Oración siguiente">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg>
-        </button>
+        <button class="control" id="btn-siguiente" aria-label="Oración siguiente"><svg><use href="#i-sig"/></svg></button>
         <button class="chip" id="btn-idioma" aria-label="Idioma del documento">ES</button>
       </div>
     </div>
   </footer>
 </section>
 
-<dialog id="dlg-agregar">
-  <h2>Agregar</h2>
-  <button class="boton ancho" id="btn-elegir-archivo">Elegir archivo (PDF, EPUB o texto)</button>
-  <button class="boton suave ancho" id="btn-pegar">Pegar texto</button>
-  <p class="nota">Los EPUB con protección (DRM), como los comprados en Apple Books o Kindle, no se pueden leer. Los PDF escaneados (fotos de páginas) tampoco, por ahora.</p>
-  <div class="acciones"><button class="boton suave" data-cerrar>Cancelar</button></div>
-</dialog>
+<!-- ===== Biblioteca ===== -->
+<section id="vista-biblioteca" class="vista" hidden>
+  <header class="barra">
+    <div class="contenedor">
+      <h1>Biblioteca</h1>
+      <button class="icono" id="btn-agregar" aria-label="Importar"><svg><use href="#i-importar"/></svg></button>
+    </div>
+  </header>
+  <div class="contenedor">
+    <div class="chips" id="filtros">
+      <button class="chip-filtro activo" data-filtro="todos">Recientes</button>
+      <button class="chip-filtro" data-filtro="curso">En curso</button>
+      <button class="chip-filtro" data-filtro="sin">Sin empezar</button>
+      <button class="chip-filtro" data-filtro="fin">Terminados</button>
+    </div>
+    <ul class="lista" id="lista"></ul>
+    <p class="nota" id="biblioteca-vacia" hidden>Nada por aquí todavía.</p>
+  </div>
+</section>
 
+<!-- ===== Voz ===== -->
+<section id="vista-voz" class="vista" hidden>
+  <header class="barra"><div class="contenedor"><h1>Voz</h1></div></header>
+  <div class="contenedor">
+    <h2 class="subtitulo" style="margin-top:8px">Elige una voz</h2>
+    <div class="voces" id="lista-voces"></div>
+    <div class="acciones-voz">
+      <button class="boton suave" id="btn-probar-voz"><svg width="18" height="18"><use href="#i-play"/></svg>Probar esta voz</button>
+      <button class="boton" id="btn-preparar-voz">Descargar y preparar</button>
+    </div>
+    <progress id="aj-barra" max="100" value="0" hidden></progress>
+    <p class="nota" id="aj-estado"></p>
+
+    <h2 class="subtitulo">Modelo</h2>
+    <div class="panel">
+      <div class="campo">
+        <label for="aj-modelo">Motor de voz</label>
+        <select id="aj-modelo">
+          <option value="v2">Supertonic 2 · 263 MB</option>
+          <option value="v3q">Supertonic 3 liviano · 145 MB</option>
+          <option value="v3">Supertonic 3 completo · 398 MB</option>
+        </select>
+      </div>
+      <div class="campos-2">
+        <div class="campo">
+          <label for="aj-pasos">Calidad</label>
+          <select id="aj-pasos">
+            <option value="8">Alta</option>
+            <option value="5">Media</option>
+            <option value="3">Rápida</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label for="aj-backend">Procesamiento</label>
+          <select id="aj-backend">
+            <option value="auto">Automático</option>
+            <option value="cpu">Solo procesador</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <p class="nota" id="aj-nota-modelo"></p>
+
+    <h2 class="subtitulo">Dispositivos</h2>
+    <div class="panel">
+      <button class="fila-ajuste" id="btn-sync-voz">
+        <span class="ico"><svg><use href="#i-sync"/></svg></span>
+        <span class="nombre">Sincronización</span>
+        <span class="valor"><span id="sync-voz-valor"></span><svg><use href="#i-chevron"/></svg></span>
+      </button>
+    </div>
+    <button class="boton peligro ancho" id="btn-borrar-voces" style="margin-top:20px">Borrar voces descargadas</button>
+  </div>
+</section>
+
+<!-- ===== Mini reproductor y pestañas ===== -->
+<div id="mini" hidden>
+  <button class="mini-abrir" id="mini-abrir">
+    <div class="mini-titulo" id="mini-titulo"></div>
+    <div class="mini-detalle" id="mini-detalle"></div>
+  </button>
+  <button class="control" id="mini-play" aria-label="Reproducir">
+    <svg id="mini-icono-play"><use href="#i-play"/></svg>
+    <svg id="mini-icono-pausa" hidden><use href="#i-pausa"/></svg>
+  </button>
+</div>
+
+<nav class="tabs" id="tabs">
+  <div class="contenedor">
+    <button class="tab activa" data-vista="inicio"><svg><use href="#i-inicio"/></svg>Inicio</button>
+    <button class="tab" data-vista="importar"><svg><use href="#i-importar"/></svg>Importar</button>
+    <button class="tab" data-vista="biblioteca"><svg><use href="#i-biblioteca"/></svg>Biblioteca</button>
+    <button class="tab" data-vista="voz"><svg><use href="#i-voz"/></svg>Voz</button>
+  </div>
+</nav>
+
+<!-- ===== Diálogos ===== -->
 <dialog id="dlg-pegar">
   <h2>Pegar texto</h2>
   <label for="pegar-titulo">Título (opcional)</label>
@@ -258,50 +617,6 @@
   <div class="acciones">
     <button class="boton suave" data-cerrar>Cancelar</button>
     <button class="boton" id="btn-guardar-pegado">Guardar</button>
-  </div>
-</dialog>
-
-<dialog id="dlg-voz">
-  <h2>Voz</h2>
-  <div class="fila">
-    <div>
-      <label for="aj-modelo">Modelo</label>
-      <select id="aj-modelo">
-        <option value="v2">Supertonic 2 · 263 MB</option>
-        <option value="v3q">Supertonic 3 liviano · 145 MB</option>
-        <option value="v3">Supertonic 3 completo · 398 MB</option>
-      </select>
-    </div>
-    <div>
-      <label for="aj-voz">Voz</label>
-      <select id="aj-voz"></select>
-    </div>
-  </div>
-  <div class="fila">
-    <div>
-      <label for="aj-pasos">Calidad</label>
-      <select id="aj-pasos">
-        <option value="8">Alta</option>
-        <option value="5">Media</option>
-        <option value="3">Rápida</option>
-      </select>
-    </div>
-    <div>
-      <label for="aj-backend">Procesamiento</label>
-      <select id="aj-backend">
-        <option value="auto">Automático</option>
-        <option value="cpu">Solo procesador</option>
-      </select>
-    </div>
-  </div>
-  <p class="nota" id="aj-nota-modelo"></p>
-  <button class="boton suave ancho" id="btn-probar-voz">Probar esta voz</button>
-  <button class="boton ancho" id="btn-preparar-voz">Descargar y preparar</button>
-  <progress id="aj-barra" max="100" value="0" hidden></progress>
-  <p class="nota" id="aj-estado"></p>
-  <div class="acciones">
-    <button class="boton peligro" id="btn-borrar-voces">Borrar voces descargadas</button>
-    <button class="boton" data-cerrar>Listo</button>
   </div>
 </dialog>
 
@@ -340,6 +655,6 @@
 <input type="file" id="archivo" accept=".pdf,.epub,.txt,.md,application/pdf,application/epub+zip,text/plain,text/markdown" hidden>
 <audio id="audio" preload="auto"></audio>
 
-<script type="module" src="main.js?v=3"></script>
+<script type="module" src="main.js?v=4"></script>
 </body>
 </html>

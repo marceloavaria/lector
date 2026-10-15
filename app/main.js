@@ -8,6 +8,7 @@ import {
 } from './sync.js?v=1';
 
 const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
 const VELOCIDADES = [0.8, 1, 1.15, 1.25, 1.5, 1.75, 2, 2.5, 3];
 const CARACTERES_POR_SEGUNDO = 15; // ritmo aproximado de la voz a 1x, para estimar lo que falta
 const NOTAS_MODELO = {
@@ -28,6 +29,12 @@ let contenido = null;
 let mapa = null;
 let seccionPintada = -1;
 let ultimoScrollUsuario = 0;
+let vistaActual = 'inicio';
+let vistaAnterior = 'inicio';   // adónde vuelve el lector o la vista previa
+let docPrevia = null;           // documento mostrado en la vista previa
+let filtroBiblioteca = 'todos';
+let nombresVoces = new Map();
+const TIPO_NOMBRE = { pdf: 'PDF', epub: 'EPUB', texto: 'Texto' };
 
 // ---------- utilidades ----------
 
@@ -49,9 +56,40 @@ function mostrarError(donde, e) {
 }
 
 function mostrarVista(cual) {
-  $('#vista-biblioteca').hidden = cual !== 'biblioteca';
-  $('#vista-lector').hidden = cual !== 'lector';
+  if (!['lector', 'previa'].includes(cual) && !['lector', 'previa'].includes(vistaActual)) vistaAnterior = cual;
+  vistaActual = cual;
+  for (const v of $$('.vista')) v.hidden = v.id !== `vista-${cual}`;
+  const conTabs = !['lector', 'previa'].includes(cual);
+  $('#tabs').hidden = !conTabs;
+  for (const t of $$('.tab')) t.classList.toggle('activa', t.dataset.vista === cual);
+  pintarMini();
   window.scrollTo(0, 0);
+}
+
+// Barra flotante con lo que está sonando, para volver al lector desde cualquier pestaña.
+function pintarMini() {
+  const mostrar = !!docAbierto && !['lector', 'previa'].includes(vistaActual);
+  $('#mini').hidden = !mostrar;
+  document.body.classList.toggle('con-mini', mostrar);
+  if (!mostrar) return;
+  $('#mini-titulo').textContent = docAbierto.titulo;
+  $('#mini-detalle').textContent = `${porcentaje(docAbierto)} % · quedan ≈ ${fmtDuracion(restante(docAbierto))}`;
+}
+
+function tapa(tipo, clase = '') {
+  const el = document.createElement('span');
+  el.className = `tapa ${tipo} ${clase}`.trim();
+  const icono = tipo === 'epub' ? 'i-libro' : tipo === 'pdf' ? 'i-pdf' : 'i-texto';
+  el.innerHTML = `<svg><use href="#${icono}"/></svg>`;
+  return el;
+}
+
+function terminado(d) {
+  return (d.oracion || 0) >= d.totalOraciones - 1 && !!d.abierto;
+}
+
+function nombreVoz(codigo) {
+  return nombresVoces.get(codigo) || codigo;
 }
 
 function mostrarCargando(texto, avance = 0) {
@@ -62,13 +100,12 @@ function mostrarCargando(texto, avance = 0) {
 
 // ---------- biblioteca ----------
 
+// Inicio: lo último que escuchaste y los recientes. Biblioteca: todo, con filtros.
 async function pintarBiblioteca() {
   $('#error-biblioteca').hidden = true;
   const docs = await listarDocs();
-  const lista = $('#lista');
-  lista.replaceChildren();
   $('#vacia').hidden = docs.length > 0;
-  $('#titulo-lista').hidden = docs.length === 0;
+  $('#titulo-recientes').hidden = docs.length === 0;
 
   // El último que escuchaste, en este u otro dispositivo (llega por la sincronización).
   const ultimaVez = (d) => Math.max(d.progresoT || 0, d.abierto || 0);
@@ -79,43 +116,114 @@ async function pintarBiblioteca() {
   if (reciente) {
     $('#continuar-titulo').textContent = reciente.titulo;
     $('#continuar-detalle').textContent = `${porcentaje(reciente)} % · quedan ≈ ${fmtDuracion(restante(reciente))}`;
+    $('#continuar-barra').style.width = `${porcentaje(reciente)}%`;
+    $('#continuar-tapa').replaceWith(Object.assign(tapa(reciente.tipo), { id: 'continuar-tapa' }));
     $('#continuar').onclick = () => abrirDoc(reciente.id, { reproducir: true });
   }
+  pintarLista($('#lista-recientes'), docs.filter((d) => d.id !== reciente?.id).slice(0, 4));
 
+  const filtros = {
+    todos: () => true,
+    curso: (d) => (d.oracion || 0) > 0 && !terminado(d),
+    sin: (d) => !(d.oracion || 0) && !terminado(d),
+    fin: terminado,
+  };
+  const filtrados = docs.filter(filtros[filtroBiblioteca]);
+  pintarLista($('#lista'), filtrados);
+  $('#biblioteca-vacia').hidden = filtrados.length > 0;
+  await revisarVoz();
+}
+
+function pintarLista(lista, docs) {
+  lista.replaceChildren();
   for (const d of docs) {
     const li = document.createElement('li');
     const abrir = document.createElement('button');
     abrir.className = 'doc-abrir';
+    const cuerpo = document.createElement('div');
+    cuerpo.className = 'doc-cuerpo';
     const titulo = document.createElement('div');
     titulo.className = 'doc-titulo';
     titulo.textContent = d.titulo;
     const meta = document.createElement('div');
     meta.className = 'doc-meta';
-    const terminado = (d.oracion || 0) >= d.totalOraciones - 1 && d.abierto;
-    meta.textContent = [d.autor, d.tipo.toUpperCase(), d.idioma.toUpperCase(), terminado ? 'terminado' : `${porcentaje(d)} %`].filter(Boolean).join(' · ');
+    const fin = terminado(d);
+    meta.textContent = [d.autor, TIPO_NOMBRE[d.tipo] || d.tipo, fin ? 'terminado' : `${porcentaje(d)} % · ≈ ${fmtDuracion(restante(d))}`].filter(Boolean).join(' · ');
     const barra = document.createElement('div');
     barra.className = 'progreso';
     const relleno = document.createElement('div');
-    relleno.style.width = `${terminado ? 100 : porcentaje(d)}%`;
+    relleno.style.width = `${fin ? 100 : porcentaje(d)}%`;
     barra.append(relleno);
-    abrir.append(titulo, meta, barra);
-    abrir.onclick = () => abrirDoc(d.id);
-    const borrar = document.createElement('button');
-    borrar.className = 'icono';
-    borrar.setAttribute('aria-label', `Borrar ${d.titulo}`);
-    borrar.textContent = 'Borrar';
-    borrar.onclick = async () => {
-      if (!confirm(`¿Borrar "${d.titulo}" de la biblioteca? Se pierde también dónde quedaste.`)) return;
-      if (docAbierto?.id === d.id) { reproductor.cerrar(); docAbierto = null; }
-      await borrarDocumento(d.id);
-      await registrarBorrado(d.id);
-      pedirSync(1500);
-      pintarBiblioteca();
-    };
-    li.append(abrir, borrar);
+    cuerpo.append(titulo, meta, barra);
+    abrir.append(tapa(d.tipo), cuerpo);
+    abrir.onclick = () => abrirPrevia(d.id);
+    const mas = document.createElement('button');
+    mas.className = 'doc-mas';
+    mas.setAttribute('aria-label', `Opciones de ${d.titulo}`);
+    mas.innerHTML = '<svg><use href="#i-mas"/></svg>';
+    mas.onclick = () => borrarDoc(d);
+    li.append(abrir, mas);
     lista.append(li);
   }
-  await revisarVoz();
+}
+
+async function borrarDoc(d) {
+  if (!confirm(`¿Borrar "${d.titulo}" de la biblioteca? Se pierde también dónde quedaste.`)) return false;
+  if (docAbierto?.id === d.id) { reproductor.cerrar(); docAbierto = null; }
+  await borrarDocumento(d.id);
+  await registrarBorrado(d.id);
+  pedirSync(1500);
+  pintarBiblioteca();
+  return true;
+}
+
+// ---------- vista previa ----------
+
+async function abrirPrevia(id) {
+  const [doc, cont] = await Promise.all([leerDoc(id), leerContenido(id)]);
+  if (!doc || !cont) {
+    mostrarError('#error-biblioteca', new Error('No encontré ese documento.'));
+    return;
+  }
+  // Si es el que está sonando, la posición viva es la del reproductor.
+  docPrevia = docAbierto?.id === id ? { ...doc, oracion: docAbierto.oracion } : doc;
+  $('#previa-tapa').replaceWith(Object.assign(tapa(doc.tipo, 'grande'), { id: 'previa-tapa' }));
+  $('#previa-titulo').textContent = doc.titulo;
+  const nSec = cont.secciones.length;
+  $('#previa-meta').textContent = [
+    doc.autor, TIPO_NOMBRE[doc.tipo] || doc.tipo,
+    nSec > 1 ? `${nSec} secciones` : '',
+    `≈ ${fmtDuracion(doc.caracteres / (CARACTERES_POR_SEGUNDO * (ajustes.velocidad || 1)))} en total`,
+  ].filter(Boolean).join(' · ');
+  const empezado = (docPrevia.oracion || 0) > 0;
+  $('#previa-panel-progreso').hidden = !empezado;
+  if (empezado) {
+    $('#previa-progreso-texto').textContent = terminado(docPrevia) ? 'Terminado' : `Vas en el ${porcentaje(docPrevia)} %`;
+    $('#previa-restante').textContent = terminado(docPrevia) ? '' : `quedan ≈ ${fmtDuracion(restante(docPrevia))}`;
+    $('#previa-barra').style.width = `${terminado(docPrevia) ? 100 : porcentaje(docPrevia)}%`;
+  }
+  $('#btn-escuchar-texto').textContent = terminado(docPrevia) ? 'Escuchar de nuevo' : empezado ? 'Seguir escuchando' : 'Escuchar';
+  pintarAjustesPrevia();
+  $('#previa-secciones').hidden = nSec < 2;
+  $('#previa-secciones').open = false;
+  $('#previa-secciones-titulo').textContent = `Secciones (${nSec})`;
+  const ol = $('#previa-secciones-lista');
+  ol.replaceChildren(...cont.secciones.map((s, k) => {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.textContent = s.titulo;
+    b.onclick = () => abrirDoc(id, { reproducir: true, oracion: cont.parrafos[s.parrafo] });
+    li.append(b);
+    return li;
+  }));
+  mostrarVista('previa');
+}
+
+function pintarAjustesPrevia() {
+  if (!docPrevia) return;
+  $('#previa-idioma-valor').textContent = docPrevia.idioma === 'en' ? 'Inglés' : 'Español';
+  $('#previa-voz-valor').textContent = nombreVoz(ajustes.voz);
+  $('#previa-velocidad-valor').textContent = fmtVel(ajustes.velocidad);
 }
 
 async function revisarVoz() {
@@ -137,7 +245,7 @@ async function guardarYAbrir({ doc, contenido: cont }, archivo) {
     pedirSync(1500);
   }
   $('#cargando').hidden = true;
-  await abrirDoc(doc.id);
+  await abrirPrevia(doc.id);
 }
 
 async function importar(archivo) {
@@ -147,7 +255,7 @@ async function importar(archivo) {
     await guardarYAbrir(r, archivo);
   } catch (e) {
     $('#cargando').hidden = true;
-    mostrarVista('biblioteca');
+    mostrarVista('inicio');
     mostrarError('#error-biblioteca', e);
   }
 }
@@ -164,6 +272,7 @@ async function guardarPegado() {
     await guardarYAbrir(r, null);
   } catch (e) {
     $('#cargando').hidden = true;
+    mostrarVista('inicio');
     mostrarError('#error-biblioteca', e);
   }
 }
@@ -190,11 +299,12 @@ function construirMapa(c) {
   return { parrafoDe, seccionDeOracion: (i) => seccionDeParrafo(parrafoDe[i]) };
 }
 
-async function abrirDoc(id, { reproducir = false } = {}) {
+async function abrirDoc(id, { reproducir = false, oracion = null } = {}) {
   // En el mismo toque: deja el audio habilitado para el play() que viene después.
   if (reproducir && !(docAbierto?.id === id && reproductor.sonando)) reproductor.desbloquear();
   if (docAbierto?.id === id && contenido) {
     mostrarVista('lector');
+    if (oracion != null) { ultimoScrollUsuario = 0; reproductor.irA(oracion); }
     if (reproducir && !reproductor.sonando) reproductor.play();
     centrarActual(true);
     return;
@@ -207,7 +317,7 @@ async function abrirDoc(id, { reproducir = false } = {}) {
     mostrarError('#error-biblioteca', new Error('No encontré ese documento.'));
     return;
   }
-  docAbierto = { ...doc, abierto: Date.now() };
+  docAbierto = { ...doc, abierto: Date.now(), ...(oracion != null ? { oracion } : {}) };
   contenido = cont;
   mapa = construirMapa(cont);
   actualizarDoc(id, { abierto: docAbierto.abierto }).catch(() => {});
@@ -307,6 +417,8 @@ function pintarOracion(i) {
   docAbierto.oracion = i;
   $('#rep-seccion').textContent = contenido.secciones[s]?.titulo || '';
   $('#rep-progreso').textContent = `${porcentaje(docAbierto)} % · ≈ ${fmtDuracion(restante(docAbierto))}`;
+  $('#rep-barra').style.width = `${porcentaje(docAbierto)}%`;
+  pintarMini();
 }
 
 function pintarEstado(estado) {
@@ -315,6 +427,9 @@ function pintarEstado(estado) {
   $('#icono-play').toggleAttribute('hidden', reproduciendo);
   $('#icono-pausa').toggleAttribute('hidden', !reproduciendo);
   $('#btn-play').setAttribute('aria-label', reproduciendo ? 'Pausar' : 'Reproducir');
+  $('#mini-icono-play').toggleAttribute('hidden', reproduciendo);
+  $('#mini-icono-pausa').toggleAttribute('hidden', !reproduciendo);
+  $('#mini-play').setAttribute('aria-label', reproduciendo ? 'Pausar' : 'Reproducir');
   const textos = {
     'cargando-voz': 'Preparando la voz…',
     generando: 'Generando la voz…',
@@ -325,17 +440,33 @@ function pintarEstado(estado) {
 
 // ---------- ajustes de voz ----------
 
-async function abrirAjustes() {
+async function cargarNombresVoces() {
+  if (nombresVoces.size) return;
   const st = await modulo();
-  const selVoz = $('#aj-voz');
-  if (!selVoz.options.length) selVoz.replaceChildren(...st.VOCES.map(([c, n]) => new Option(n, c)));
+  nombresVoces = new Map(st.VOCES);
+}
+
+async function abrirAjustes() {
+  await cargarNombresVoces();
+  const lista = $('#lista-voces');
+  if (!lista.children.length) {
+    for (const [codigo, nombre] of nombresVoces) {
+      const l = document.createElement('label');
+      l.className = `voz-op ${codigo.startsWith('M') ? 'hombre' : 'mujer'}`;
+      l.innerHTML = `<input type="radio" name="aj-voz" value="${codigo}"><span class="avatar">${codigo}</span><b>${nombre}</b><span class="check"><svg><use href="#i-check"/></svg></span>`;
+      l.querySelector('input').onchange = cambiarAjuste;
+      lista.append(l);
+    }
+  }
+  const radio = $(`input[name="aj-voz"][value="${ajustes.voz}"]`);
+  if (radio) radio.checked = true;
   $('#aj-modelo').value = ajustes.modelo;
-  $('#aj-voz').value = ajustes.voz;
   $('#aj-pasos').value = String(ajustes.pasos);
   $('#aj-backend').value = ajustes.backend;
   $('#aj-barra').hidden = true;
   await pintarNotaModelo();
-  $('#dlg-voz').showModal();
+  pintarEstadoSync();
+  mostrarVista('voz');
 }
 
 async function pintarNotaModelo() {
@@ -347,11 +478,12 @@ async function pintarNotaModelo() {
 async function cambiarAjuste() {
   ajustes = await guardarAjustesVoz({
     modelo: $('#aj-modelo').value,
-    voz: $('#aj-voz').value,
+    voz: $('input[name="aj-voz"]:checked')?.value || ajustes.voz,
     pasos: parseInt($('#aj-pasos').value, 10),
     backend: $('#aj-backend').value,
   });
   reproductor.cambiarAjustes(ajustes);
+  pintarAjustesPrevia();
   await pintarNotaModelo();
   revisarVoz();
 }
@@ -440,13 +572,17 @@ async function pintarEstadoSync(sincronizando = false) {
   const el = $('#estado-sync');
   const cfg = await configuracion();
   el.classList.toggle('error-sync', !!errorSync);
-  if (!cfg?.token) el.textContent = 'Sincronizar entre dispositivos ›';
-  else if (sincronizando) el.textContent = 'Sincronizando…';
-  else if (errorSync) el.textContent = `No se pudo sincronizar: ${errorSync} ›`;
+  el.classList.toggle('ok', !!cfg?.token && !errorSync);
+  let texto;
+  if (!cfg?.token) texto = 'Sin sincronizar';
+  else if (sincronizando) texto = 'Sincronizando…';
+  else if (errorSync) texto = 'Error al sincronizar';
   else {
     const ts = await ultimaSync();
-    el.textContent = ts ? `Sincronizado ${haceCuanto(ts)}` : 'Sincronización activada';
+    texto = ts ? `Sincronizado ${haceCuanto(ts)}` : 'Sincronización activada';
   }
+  el.querySelector('span').textContent = texto;
+  $('#sync-voz-valor').textContent = cfg?.token ? (errorSync ? 'Error' : 'Activada') : 'Desactivada';
 }
 
 // Agenda una sincronización dentro de `ms`. Si ya hay una antes, se respeta esa:
@@ -483,13 +619,13 @@ async function aplicarCambiosRemotos() {
     if (!doc) {
       reproductor.cerrar();
       docAbierto = null;
-      mostrarVista('biblioteca');
+      mostrarVista('inicio');
     } else if ((doc.progresoT || 0) > (reproductor.cambioPosicion || 0) && !reproductor.sonando) {
       docAbierto.oracion = doc.oracion;
       reproductor.posicionarDesdeSync(doc.oracion, doc.progresoT);
     }
   }
-  if (!$('#vista-biblioteca').hidden) await pintarBiblioteca();
+  if (['inicio', 'biblioteca'].includes(vistaActual)) await pintarBiblioteca();
 }
 
 async function abrirSync() {
@@ -551,11 +687,61 @@ async function conectarSync() {
 
 // ---------- arranque ----------
 
+async function cambiarVelocidad() {
+  const k = VELOCIDADES.indexOf(ajustes.velocidad);
+  const v = VELOCIDADES[(k + 1) % VELOCIDADES.length];
+  ajustes = await guardarAjustesVoz({ velocidad: v });
+  reproductor.cambiarVelocidad(v);
+  $('#btn-velocidad').textContent = fmtVel(v);
+  pintarAjustesPrevia();
+  if (docAbierto) pintarOracion(reproductor.actual);
+}
+
+async function alternarIdioma(doc) {
+  const idioma = doc.idioma === 'es' ? 'en' : 'es';
+  doc.idioma = idioma;
+  await actualizarDoc(doc.id, { idioma, metaT: Date.now() });
+  pedirSync(1500);
+  if (docAbierto?.id === doc.id) {
+    docAbierto.idioma = idioma;
+    $('#btn-idioma').textContent = idioma.toUpperCase();
+    $('#texto').lang = idioma;
+    reproductor.cambiarAjustes(ajustes, idioma);
+  }
+  if (docPrevia?.id === doc.id) { docPrevia.idioma = idioma; pintarAjustesPrevia(); }
+}
+
 function conectar() {
-  $('#btn-agregar').onclick = () => $('#dlg-agregar').showModal();
-  $('#btn-agregar-vacia').onclick = () => $('#dlg-agregar').showModal();
-  $('#btn-elegir-archivo').onclick = () => { $('#dlg-agregar').close(); $('#archivo').click(); };
-  $('#btn-pegar').onclick = () => { $('#dlg-agregar').close(); $('#dlg-pegar').showModal(); };
+  for (const t of $$('.tab')) {
+    t.onclick = () => {
+      if (t.dataset.vista === 'voz') abrirAjustes();
+      else { mostrarVista(t.dataset.vista); if (t.dataset.vista !== 'importar') pintarBiblioteca(); }
+    };
+  }
+  $('#btn-agregar').onclick = () => mostrarVista('importar');
+  $('#btn-agregar-vacia').onclick = () => mostrarVista('importar');
+  $('#btn-ver-biblioteca').onclick = () => { mostrarVista('biblioteca'); pintarBiblioteca(); };
+  for (const b of $$('.chip-filtro')) {
+    b.onclick = () => {
+      filtroBiblioteca = b.dataset.filtro;
+      for (const o of $$('.chip-filtro')) o.classList.toggle('activo', o === b);
+      pintarBiblioteca();
+    };
+  }
+  $('#btn-elegir-archivo').onclick = () => $('#archivo').click();
+  $('#btn-pegar').onclick = () => $('#dlg-pegar').showModal();
+
+  // Vista previa
+  $('#btn-previa-volver').onclick = () => { mostrarVista(vistaAnterior); pintarBiblioteca(); };
+  $('#btn-previa-borrar').onclick = async () => { if (docPrevia && await borrarDoc(docPrevia)) mostrarVista(vistaAnterior); };
+  $('#btn-escuchar').onclick = () => { if (docPrevia) abrirDoc(docPrevia.id, { reproducir: true }); };
+  $('#previa-idioma').onclick = () => { if (docPrevia) alternarIdioma(docPrevia); };
+  $('#previa-velocidad').onclick = cambiarVelocidad;
+  $('#previa-voz').onclick = abrirAjustes;
+
+  // Mini reproductor
+  $('#mini-abrir').onclick = () => { if (docAbierto) abrirDoc(docAbierto.id); };
+  $('#mini-play').onclick = () => reproductor.alternar();
   $('#btn-guardar-pegado').onclick = guardarPegado;
   $('#archivo').onchange = (e) => {
     const f = e.target.files[0];
@@ -566,30 +752,14 @@ function conectar() {
 
   $('#btn-volver').onclick = async () => {
     await reproductor.guardarYa();
-    mostrarVista('biblioteca');
+    mostrarVista(vistaAnterior);
     pintarBiblioteca();
   };
   $('#btn-play').onclick = () => reproductor.alternar();
   $('#btn-anterior').onclick = () => { ultimoScrollUsuario = 0; reproductor.anterior(); };
   $('#btn-siguiente').onclick = () => { ultimoScrollUsuario = 0; reproductor.siguiente(); };
-  $('#btn-velocidad').onclick = async () => {
-    const k = VELOCIDADES.indexOf(ajustes.velocidad);
-    const v = VELOCIDADES[(k + 1) % VELOCIDADES.length];
-    ajustes = await guardarAjustesVoz({ velocidad: v });
-    reproductor.cambiarVelocidad(v);
-    $('#btn-velocidad').textContent = fmtVel(v);
-    if (docAbierto) pintarOracion(reproductor.actual);
-  };
-  $('#btn-idioma').onclick = async () => {
-    if (!docAbierto) return;
-    const idioma = docAbierto.idioma === 'es' ? 'en' : 'es';
-    docAbierto.idioma = idioma;
-    await actualizarDoc(docAbierto.id, { idioma, metaT: Date.now() });
-    pedirSync(1500);
-    $('#btn-idioma').textContent = idioma.toUpperCase();
-    $('#texto').lang = idioma;
-    reproductor.cambiarAjustes(ajustes, idioma);
-  };
+  $('#btn-velocidad').onclick = cambiarVelocidad;
+  $('#btn-idioma').onclick = () => { if (docAbierto) alternarIdioma(docAbierto); };
   $('#secciones').onchange = (e) => irASeccion(parseInt(e.target.value, 10));
   $('#texto').addEventListener('click', (e) => {
     const o = e.target.closest('.o');
@@ -609,6 +779,7 @@ function conectar() {
   $('#btn-seguir').onclick = () => { ultimoScrollUsuario = 0; centrarActual(); };
 
   $('#estado-sync').onclick = abrirSync;
+  $('#btn-sync-voz').onclick = abrirSync;
   $('#btn-sync-conectar').onclick = conectarSync;
   $('#btn-sync-ahora').onclick = async () => {
     $('#sync-estado').textContent = 'Sincronizando…';
@@ -630,9 +801,8 @@ function conectar() {
   });
 
   $('#btn-ajustes').onclick = abrirAjustes;
-  $('#btn-ajustes-biblioteca').onclick = abrirAjustes;
   $('#btn-descargar-voz').onclick = async () => { await abrirAjustes(); prepararVoz(); };
-  for (const id of ['#aj-modelo', '#aj-voz', '#aj-pasos', '#aj-backend']) $(id).onchange = cambiarAjuste;
+  for (const id of ['#aj-modelo', '#aj-pasos', '#aj-backend']) $(id).onchange = cambiarAjuste;
   $('#btn-preparar-voz').onclick = prepararVoz;
   $('#btn-probar-voz').onclick = probarVoz;
   $('#btn-borrar-voces').onclick = async () => {
@@ -673,6 +843,7 @@ async function iniciar() {
     ));
   }
 
+  cargarNombresVoces().catch(() => {});
   await pintarBiblioteca();
   pintarEstadoSync();
   syncInicial = correrSync().finally(() => { syncInicial = null; });
