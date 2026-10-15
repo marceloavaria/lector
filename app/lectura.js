@@ -1,17 +1,28 @@
-// Reproductor: genera la voz oración por oración un poco por delante de lo que suena,
-// encadena los audios en un solo elemento <audio> (así sigue sonando con otra app en
-// pantalla) y avisa qué oración está sonando para resaltarla y guardarla.
+// Reproductor: genera la voz oración por oración un poco por delante de lo que suena y la
+// junta en bloques continuos de ~1 minuto (así no hay un cambio de archivo entre oraciones,
+// solo uno por bloque, en un fin de párrafo). Suena en un solo elemento <audio>, así sigue
+// con otra app en pantalla, y avisa qué oración está sonando para resaltarla y guardarla.
 
-import { cargarMotor, modulo, motorListo, reiniciarMotor } from './voz.js?v=4';
+import { cargarMotor, motorListo, reiniciarMotor } from './voz.js?v=4';
 import { actualizarDoc } from './db.js?v=1';
 import { anotar } from './registro.js?v=2';
 
-const BUFFER_SEG = 90;     // segundos de audio generados por delante
-const MAX_ADELANTE = 60;   // oraciones generadas por delante, como tope
-const PAUSA_ORACION = 0.18;
+const BUFFER_SEG = 150;          // segundos de audio generados por delante
+const MAX_ADELANTE = 100;        // oraciones generadas por delante, como tope
+const HISTORIA = 20;             // oraciones ya escuchadas que se guardan para retroceder rápido
+const BLOQUE_MIN_SEG = 60;       // un bloque termina en el primer fin de párrafo después de esto…
+const BLOQUE_MAX_SEG = 150;      // …o en el primer fin de oración después de esto
+const PAUSA_FIN_BLOQUE = 0.1;    // el cambio de un bloque al siguiente ya agrega su propia pausa
+// La voz trae ~0,6 s de silencio al comienzo y al final de cada oración: se recorta y se
+// pone una pausa propia, natural y pareja.
+const UMBRAL_VOZ = 0.01;         // ~ -40 dB: por debajo es silencio
+const MARGEN_ANTES = 0.05;
+const MARGEN_DESPUES = 0.1;
+const PAUSA_ORACION = 0.2;
 const PAUSA_PARRAFO = 0.55;
+const PAUSA_CORTE = 0.04;        // una oración larga partida en una coma o entre palabras
 const SALTO_SEG = 15;            // botones 15− y 15+
-const CARACTERES_POR_SEG = 14;   // ritmo de la voz a 1x, para estimar oraciones aún no generadas
+const CARACTERES_POR_SEG = 15;   // ritmo de la voz a 1x, para estimar oraciones aún no generadas
 
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -19,17 +30,38 @@ const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 // otra app o por memoria). Se distinguen de errores del texto o de la descarga.
 const esFalloGpu = (e) => /OrtRun|MapAsync|map async|webgpu|wgpu|device lost|GPUDevice/i.test(e?.message || String(e));
 
-// Medio segundo de silencio en WAV, para desbloquear el audio en el mismo toque.
-function silencioUrl() {
-  const n = 22050;
-  const buf = new ArrayBuffer(44 + n * 2);
+// WAV PCM 16 bits mono.
+function wav(int16, sampleRate) {
+  const buf = new ArrayBuffer(44 + int16.length * 2);
   const v = new DataView(buf);
   const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-  str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
+  str(0, 'RIFF'); v.setUint32(4, 36 + int16.length * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
   v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-  v.setUint32(24, 44100, true); v.setUint32(28, 88200, true); v.setUint16(32, 2, true);
-  v.setUint16(34, 16, true); str(36, 'data'); v.setUint32(40, n * 2, true);
-  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true); v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true); str(36, 'data'); v.setUint32(40, int16.length * 2, true);
+  new Int16Array(buf, 44).set(int16);
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
+// Medio segundo de silencio, para desbloquear el audio en el mismo toque.
+const silencioUrl = () => URL.createObjectURL(wav(new Int16Array(22050), 44100));
+
+// Quita el silencio del comienzo y del final (buscando en ventanas de 10 ms) y pasa a 16 bits.
+function recortar(pcm, sr) {
+  const ventana = Math.max(1, Math.floor(sr * 0.01));
+  const hayVoz = (desde) => {
+    for (let j = desde; j < Math.min(pcm.length, desde + ventana); j++) if (Math.abs(pcm[j]) > UMBRAL_VOZ) return true;
+    return false;
+  };
+  let a = 0;
+  while (a < pcm.length && !hayVoz(a)) a += ventana;
+  let b = pcm.length - ventana;
+  while (b > a && !hayVoz(b)) b -= ventana;
+  const ini = a >= pcm.length ? 0 : Math.max(0, a - Math.floor(MARGEN_ANTES * sr));
+  const fin = a >= pcm.length ? pcm.length : Math.min(pcm.length, b + ventana + Math.floor(MARGEN_DESPUES * sr));
+  const out = new Int16Array(fin - ini);
+  for (let j = ini; j < fin; j++) out[j - ini] = Math.max(-1, Math.min(1, pcm[j])) * 32767;
+  return out;
 }
 
 export class Reproductor extends EventTarget {
@@ -39,23 +71,26 @@ export class Reproductor extends EventTarget {
     this.doc = null;
     this.contenido = null;
     this.ajustes = null;
-    this.actual = 0;          // oración que suena (o sonará al dar play)
-    this.enAudio = -1;        // oración cargada en el <audio>; -1 = ninguna o silencio
-    this.sonando = false;     // lo que quiere el usuario
+    this.actual = 0;            // oración que suena (o sonará al dar play)
+    this.bloque = null;         // bloque cargado en el <audio>: { ini, fin, url, offsets, dur }
+    this.sonando = false;       // lo que quiere el usuario
     this.generando = false;
-    this.epoca = 0;           // cambia cuando cambia la voz: invalida lo generado
-    this.listos = new Map();  // oración -> { url, seg }
+    this.epoca = 0;             // cambia cuando cambia la voz: invalida lo generado
+    this.listos = new Map();    // oración -> { pcm: Int16Array, pausa, seg }
+    this.sr = 44100;
     this.velocidad = 1;
     this.finParrafo = new Set();
     this.temporizador = null;
     this.silencio = silencioUrl();
     this.ignorarPausaHasta = 0;
     this.respaldoCpu = false;   // la gráfica falló: se genera con el procesador hasta volver a la app
-    this.reintentos = new Set(); // oraciones cuyo audio ya se regeneró una vez por no poder sonar
-    this.espera = null;         // { tipo: 'arranque' | 'corte' | 'salto' | 'ajuste', t } mientras no hay audio
+    this.reintentos = new Set(); // bloques que ya se rehicieron una vez por no poder sonar
+    this.espera = null;         // { tipo: 'arranque' | 'corte' | 'salto' | 'ajuste' | 'reintento', t }
     this.metrica = { n: 0, audio: 0, gen: 0, backend: '' };
 
     audio.addEventListener('ended', () => this.#alTerminar());
+    audio.addEventListener('timeupdate', () => this.#seguirPosicion());
+    audio.addEventListener('seeked', () => this.#seguirPosicion());
     audio.addEventListener('pause', () => {
       // Pausa del sistema (llamada, otra app, controles de la pantalla bloqueada).
       // Las pausas que provoca el propio reproductor al cambiar de audio se ignoran.
@@ -66,7 +101,7 @@ export class Reproductor extends EventTarget {
       this.guardarYa();
     });
     audio.addEventListener('play', () => {
-      if (!this.sonando && this.enAudio >= 0) {
+      if (!this.sonando && this.bloque) {
         this.sonando = true;
         anotar('play', { motivo: 'sistema', oracion: this.actual });
         this.#estado('sonando');
@@ -96,7 +131,8 @@ export class Reproductor extends EventTarget {
 
   abrir(doc, contenido, ajustes) {
     this.pausar();
-    this.#vaciar();
+    this.#soltarBloque();
+    this.listos.clear();
     this.doc = doc;
     this.contenido = contenido;
     this.ajustes = ajustes;
@@ -104,7 +140,6 @@ export class Reproductor extends EventTarget {
     this.actual = Math.max(0, Math.min(doc.oracion || 0, this.total - 1));
     this.cambioPosicion = doc.progresoT || 0;
     this.reintentos = new Set();
-    this.enAudio = -1;
     this.finParrafo = new Set(contenido.parrafos.slice(1).map((p) => p - 1));
     this.finParrafo.add(this.total - 1);
     this.fallosGpu = 0;
@@ -123,7 +158,8 @@ export class Reproductor extends EventTarget {
 
   cerrar() {
     this.pausar();
-    this.#vaciar();
+    this.#soltarBloque();
+    this.listos.clear();
     this.doc = null;
     this.contenido = null;
   }
@@ -132,7 +168,7 @@ export class Reproductor extends EventTarget {
   // en el mismo toque y deja el audio habilitado para el play() que viene después.
   desbloquear() {
     if (this.sonando) return;
-    this.#cambiarFuente(this.silencio, -1);
+    this.#cambiarFuente(this.silencio, null);
     this.audio.play().catch(() => { /* basta con el intento dentro del toque */ });
   }
 
@@ -140,20 +176,23 @@ export class Reproductor extends EventTarget {
   // iOS solo deja reproducir audio si ocurre en el mismo instante del toque.
   play() {
     if (!this.doc) return;
-    if (this.actual >= this.total - 1 && this.enAudio === this.actual && this.audio.ended) this.actual = 0;
+    if (this.bloque && this.bloque.fin >= this.total - 1 && this.audio.ended) {
+      this.#soltarBloque();
+      this.actual = 0;
+    }
     this.sonando = true;
     anotar('play', { motivo: 'tú', oracion: this.actual });
-    if (this.enAudio === this.actual && this.audio.src && !this.audio.ended) {
-      this.audio.play().catch((e) => this.#falloAlSonar(e, this.actual));
+    if (this.#bloqueCubre(this.actual) && !this.audio.ended) {
+      this.audio.play().catch((e) => this.#falloAlSonar(e));
       this.#estado('sonando');
       this.#llenar();
       return;
     }
     // Desbloquea el audio con un silencio mientras se genera la primera oración.
     this.espera = { tipo: 'arranque', t: Date.now() };
-    this.#cambiarFuente(this.silencio, -1);
-    this.audio.play().catch(() => { /* se reintenta con la primera oración */ });
-    if (this.listos.has(this.actual)) this.#reproducir(this.actual);
+    this.#cambiarFuente(this.silencio, null);
+    this.audio.play().catch(() => { /* se reintenta con el primer bloque */ });
+    if (this.listos.has(this.actual)) this.#sonarDesde(this.actual);
     else this.#estado(this.#motorListo() ? 'generando' : 'cargando-voz');
     this.#llenar();
   }
@@ -178,78 +217,80 @@ export class Reproductor extends EventTarget {
     if (!this.doc || this.sonando) return;
     this.actual = Math.max(0, Math.min(i, this.total - 1));
     this.cambioPosicion = cuando;
-    this.enAudio = -1;
+    if (!this.#bloqueCubre(this.actual)) this.#soltarBloque();
+    else this.audio.currentTime = this.#offset(this.actual);
     this.#emitir('oracion', this.actual);
   }
 
-  irA(i) {
+  // Ir a una oración (tocarla en el texto, cambiar de sección, saltos largos).
+  irA(i, desplazamiento = 0) {
     if (!this.doc) return;
     i = Math.max(0, Math.min(i, this.total - 1));
     this.actual = i;
     this.cambioPosicion = Date.now();
-    this.#podar();
-    if (this.sonando) {
-      if (this.listos.has(i)) this.#reproducir(i);
+    if (this.#bloqueCubre(i)) {
+      // Dentro del bloque que ya suena: se mueve al instante, sin regenerar nada.
+      this.audio.currentTime = this.#offset(i) + desplazamiento;
+      this.#emitir('oracion', i);
+      if (this.sonando && this.audio.paused) this.audio.play().catch((e) => this.#falloAlSonar(e));
+    } else if (this.sonando) {
+      if (this.listos.has(i)) this.#sonarDesde(i);
       else {
         this.espera = { tipo: 'salto', t: Date.now() };
         this.#silenciarPausa();
         this.audio.pause();
-        this.enAudio = -1;
+        this.#soltarBloque();
         this.#estado('generando');
         this.#emitir('oracion', i);
         this.#llenar();
       }
     } else {
-      this.enAudio = -1;
+      this.#soltarBloque();
       this.#emitir('oracion', i);
     }
+    this.#podar();
     this.#guardarPronto();
   }
 
   siguiente() { this.irA(this.actual + 1); }
 
-  // Saltos de 15 segundos de audio, como en los podcasts. Si el punto cae dentro de la oración
-  // que suena, se mueve ahí mismo; si no, se va al comienzo de la oración donde cae (así no
-  // se retoma a mitad de frase).
+  anterior() {
+    if (this.#bloqueCubre(this.actual) && this.audio.currentTime - this.#offset(this.actual) > 2) this.irA(this.actual);
+    else this.irA(this.actual - 1);
+  }
+
+  // Saltos de 15 segundos, como en los podcasts. Dentro del bloque cargado es exacto e
+  // instantáneo; fuera de él va al comienzo de la oración donde cae (sin cortar una frase).
   retroceder(seg = SALTO_SEG) {
     if (!this.doc) return;
-    const enCurso = this.enAudio === this.actual ? this.audio.currentTime : 0;
-    if (enCurso >= seg) {
-      this.audio.currentTime = enCurso - seg;
+    const b = this.bloque;
+    if (b && this.#bloqueCubre(this.actual)) {
+      const t = this.audio.currentTime - seg;
+      if (t >= 0) {
+        this.audio.currentTime = t;
+        this.#seguirPosicion();
+        return;
+      }
+      this.#retrocederDesde(b.ini, -t);
       return;
     }
-    let falta = seg - enCurso;
-    let i = this.actual;
-    while (i > 0 && falta > 0) {
-      i--;
-      falta -= this.#duracion(i);
-    }
-    this.irA(i);
+    this.#retrocederDesde(this.actual, seg);
   }
 
   avanzar(seg = SALTO_SEG) {
     if (!this.doc) return;
-    const enCurso = this.enAudio === this.actual ? this.audio.currentTime : 0;
-    const quedan = Math.max(0, this.#duracion(this.actual) - enCurso);
-    if (this.enAudio === this.actual && quedan > seg + 0.5) {
-      this.audio.currentTime = enCurso + seg;
+    const b = this.bloque;
+    if (b && this.#bloqueCubre(this.actual)) {
+      const t = this.audio.currentTime + seg;
+      if (t < b.dur - 0.3) {
+        this.audio.currentTime = t;
+        this.#seguirPosicion();
+        return;
+      }
+      this.#avanzarDesde(b.fin + 1, t - b.dur);
       return;
     }
-    let falta = seg - quedan;
-    let i = this.actual + 1;
-    while (i < this.total - 1 && falta > this.#duracion(i)) {
-      falta -= this.#duracion(i);
-      i++;
-    }
-    this.irA(Math.min(i, this.total - 1));
-  }
-
-  anterior() {
-    if (this.sonando && this.enAudio === this.actual && this.audio.currentTime > 2) {
-      this.audio.currentTime = 0;
-      return;
-    }
-    this.irA(this.actual - 1);
+    this.#avanzarDesde(this.actual + 1, seg - this.#duracion(this.actual));
   }
 
   cambiarVelocidad(v) {
@@ -264,14 +305,16 @@ export class Reproductor extends EventTarget {
     if (idioma && this.doc) this.doc = { ...this.doc, idioma };
     this.cambiarVelocidad(ajustes.velocidad || this.velocidad);
     this.epoca++;
-    this.#vaciar();
+    this.listos.clear();
     if (this.sonando) {
       this.espera = { tipo: 'ajuste', t: Date.now() };
       this.#silenciarPausa();
       this.audio.pause();
-      this.enAudio = -1;
+      this.#soltarBloque();
       this.#estado(this.#motorListo() ? 'generando' : 'cargando-voz');
       this.#llenar();
+    } else {
+      this.#soltarBloque();
     }
   }
 
@@ -303,15 +346,33 @@ export class Reproductor extends EventTarget {
     this.ignorarPausaHasta = performance.now() + 500;
   }
 
-  #cambiarFuente(url, indice) {
+  #bloqueCubre(i) {
+    const b = this.bloque;
+    return !!b && this.audio.src === b.url && i >= b.ini && i <= b.fin;
+  }
+
+  #offset(i) {
+    return this.bloque.offsets[i - this.bloque.ini];
+  }
+
+  #cambiarFuente(url, bloque) {
     this.#silenciarPausa();
-    const anterior = this.audio.src;
-    this.enAudio = indice;
+    const anterior = this.bloque;
+    this.bloque = bloque;
     this.audio.src = url;
-    // El audio que se reemplaza se suelta si ya no está en la cola.
-    if (anterior && anterior !== this.silencio && ![...this.listos.values()].some((c) => c.url === anterior)) {
-      URL.revokeObjectURL(anterior);
+    if (anterior && anterior.url !== url) URL.revokeObjectURL(anterior.url);
+  }
+
+  #soltarBloque() {
+    if (!this.bloque) return;
+    const url = this.bloque.url;
+    this.bloque = null;
+    if (this.audio.src === url) {
+      this.#silenciarPausa();
+      this.audio.removeAttribute('src');
+      this.audio.load();
     }
+    URL.revokeObjectURL(url);
   }
 
   #guardarPronto() {
@@ -341,7 +402,7 @@ export class Reproductor extends EventTarget {
       anotar('respaldo-cpu', { pasos: this.#pasosEfectivos() }, { urgente: true });
       this.#emitir('aviso', 'La tarjeta gráfica falló. Sigo con el procesador hasta que vuelvas a la app.');
     }
-    this.#estado('cargando-voz');
+    if (!this.bloque) this.#estado('cargando-voz');
   }
 
   // `donde`: en qué parte falló (cargar, generar, sonar, ciclo), para el registro del viaje.
@@ -354,75 +415,142 @@ export class Reproductor extends EventTarget {
     this.#emitir('error', e);
   }
 
-  // Un audio ya generado que no se pudo reproducir ("The operation is not supported"): se
-  // vuelve a generar esa oración una vez en vez de detener la lectura.
-  #falloAlSonar(e, i) {
+  // Un bloque que no se pudo reproducir ("The operation is not supported"): se rehace una
+  // vez desde la oración actual en vez de detener la lectura.
+  #falloAlSonar(e) {
     if (e?.name === 'AbortError') return;
-    if (e?.name !== 'NotSupportedError' || this.reintentos.has(i)) {
+    const clave = this.bloque?.ini ?? this.actual;
+    if (e?.name !== 'NotSupportedError' || this.reintentos.has(clave)) {
       this.#fallo(e, 'sonar');
       return;
     }
-    this.reintentos.add(i);
-    anotar('audio-reintento', { oracion: i, msg: String(e?.message || e).slice(0, 80) }, { urgente: true });
-    const c = this.listos.get(i);
-    if (c) {
-      this.listos.delete(i);
-      if (this.enAudio !== i) URL.revokeObjectURL(c.url);
-    }
-    if (i !== this.actual || !this.sonando) return;
-    this.enAudio = -1;
+    this.reintentos.add(clave);
+    anotar('audio-reintento', { oracion: this.actual, msg: String(e?.message || e).slice(0, 80) }, { urgente: true });
+    this.#soltarBloque();
+    if (!this.sonando) return;
     this.espera = { tipo: 'reintento', t: Date.now() };
-    this.#estado('generando');
-    this.#llenar();
+    if (this.listos.has(this.actual)) this.#sonarDesde(this.actual);
+    else {
+      this.#estado('generando');
+      this.#llenar();
+    }
   }
 
-  #reproducir(i) {
-    const c = this.listos.get(i);
+  // Junta en un solo audio las oraciones ya generadas desde `ini`, hasta un fin de párrafo
+  // pasados BLOQUE_MIN_SEG (o un fin de oración pasados BLOQUE_MAX_SEG).
+  #armarBloque(ini) {
+    const partes = [];
+    const offsets = [];
+    let t = 0;
+    let i = ini;
+    while (i < this.total && this.listos.has(i)) {
+      const c = this.listos.get(i);
+      offsets.push(t);
+      partes.push(c);
+      t += c.seg;
+      const cierra = this.finParrafo.has(i);
+      i++;
+      if ((t >= BLOQUE_MIN_SEG && cierra) || t >= BLOQUE_MAX_SEG) break;
+    }
+    if (!partes.length) return null;
+    const pausas = partes.map((c, k) => (k === partes.length - 1 ? Math.min(c.pausa, PAUSA_FIN_BLOQUE) : c.pausa));
+    const total = partes.reduce((n, c, k) => n + c.pcm.length + Math.round(pausas[k] * this.sr), 0);
+    const datos = new Int16Array(total); // los ceros son las pausas
+    let off = 0;
+    partes.forEach((c, k) => {
+      datos.set(c.pcm, off);
+      off += c.pcm.length + Math.round(pausas[k] * this.sr);
+    });
+    const dur = t - partes.at(-1).pausa + pausas.at(-1);
+    return { ini, fin: i - 1, url: URL.createObjectURL(wav(datos, this.sr)), offsets, dur };
+  }
+
+  // Empieza a sonar un bloque nuevo desde la oración `i` (que ya está generada).
+  #sonarDesde(i) {
+    const b = this.#armarBloque(i);
+    if (!b) return;
     this.actual = i;
     this.cambioPosicion = Date.now();
     this.#emitir('oracion', i);
     this.#guardarPronto();
-    if (!c) {
-      this.enAudio = -1;
-      this.#estado('generando');
-      this.#llenar();
-      return;
-    }
     if (this.espera) {
       const seg = Math.round((Date.now() - this.espera.t) / 100) / 10;
       anotar(this.espera.tipo === 'corte' ? 'corte-fin' : this.espera.tipo, { oracion: i, seg }, { urgente: this.espera.tipo === 'corte' });
       this.espera = null;
     }
-    this.#cambiarFuente(c.url, i);
+    anotar('bloque', { desde: b.ini, hasta: b.fin, seg: Math.round(b.dur) });
+    this.#cambiarFuente(b.url, b);
     this.audio.defaultPlaybackRate = this.velocidad;
     this.audio.playbackRate = this.velocidad;
-    this.audio.play().catch((e) => this.#falloAlSonar(e, i));
+    this.audio.play().catch((e) => this.#falloAlSonar(e));
     this.#estado('sonando');
     this.#mediaSession();
     this.#podar();
     this.#llenar();
   }
 
+  // Qué oración está sonando según el segundo exacto del bloque.
+  #seguirPosicion() {
+    const b = this.bloque;
+    if (!b || this.audio.src !== b.url) return;
+    const t = this.audio.currentTime;
+    let k = b.offsets.length - 1;
+    while (k > 0 && b.offsets[k] > t + 0.05) k--;
+    const i = b.ini + k;
+    if (i === this.actual) return;
+    this.actual = i;
+    this.cambioPosicion = Date.now();
+    this.#emitir('oracion', i);
+    this.#guardarPronto();
+    this.#mediaSession();
+    this.#podar();
+  }
+
   #alTerminar() {
     if (!this.sonando) return;
-    if (this.enAudio === -1) {
-      // Terminó el silencio de desbloqueo: suena la oración actual apenas esté lista.
-      if (this.listos.has(this.actual)) this.#reproducir(this.actual);
+    const b = this.bloque;
+    if (!b) {
+      // Terminó el silencio de desbloqueo: suena apenas esté lista la oración actual.
+      if (this.listos.has(this.actual)) this.#sonarDesde(this.actual);
       return;
     }
-    if (this.actual + 1 >= this.total) {
+    const sig = b.fin + 1;
+    if (sig >= this.total) {
       this.sonando = false;
-      anotar('fin-documento', { oracion: this.actual });
+      this.actual = b.fin;
+      anotar('fin-documento', { oracion: b.fin });
       this.#estado('fin');
       this.guardarYa();
       return;
     }
-    if (!this.listos.has(this.actual + 1)) {
-      // Un corte: terminó una oración y la siguiente aún no está generada.
-      this.espera = { tipo: 'corte', t: Date.now() };
-      anotar('corte-inicio', { oracion: this.actual + 1, backend: this.respaldoCpu ? 'wasm' : this.metrica.backend || '' }, { urgente: true });
+    if (this.listos.has(sig)) {
+      this.#sonarDesde(sig);
+      return;
     }
-    this.#reproducir(this.actual + 1);
+    // Un corte: terminó el bloque y la oración siguiente aún no está generada.
+    this.espera = { tipo: 'corte', t: Date.now() };
+    anotar('corte-inicio', { oracion: sig, backend: this.respaldoCpu ? 'wasm' : this.metrica.backend || '' }, { urgente: true });
+    this.#soltarBloque();
+    this.actual = sig;
+    this.#emitir('oracion', sig);
+    this.#estado('generando');
+    this.#llenar();
+  }
+
+  #retrocederDesde(i, falta) {
+    while (i > 0 && falta > 0) {
+      i--;
+      falta -= this.#duracion(i);
+    }
+    this.irA(i);
+  }
+
+  #avanzarDesde(i, falta) {
+    while (i < this.total - 1 && falta > this.#duracion(i)) {
+      falta -= this.#duracion(i);
+      i++;
+    }
+    this.irA(Math.min(i, this.total - 1));
   }
 
   // Duración de una oración: la real si ya está generada; si no, estimada por su largo.
@@ -430,19 +558,28 @@ export class Reproductor extends EventTarget {
     const c = this.listos.get(i);
     if (c) return c.seg;
     const largo = this.contenido?.oraciones[i]?.length || 0;
-    return largo / CARACTERES_POR_SEG + (this.finParrafo.has(i) ? PAUSA_PARRAFO : PAUSA_ORACION);
+    return largo / CARACTERES_POR_SEG + this.#pausa(i);
+  }
+
+  #pausa(i) {
+    if (this.finParrafo.has(i)) return PAUSA_PARRAFO;
+    return /[.!?…:;]["'»”’)\]]*$/.test(this.contenido.oraciones[i] || '') ? PAUSA_ORACION : PAUSA_CORTE;
   }
 
   #segundosAdelante() {
     let s = 0;
-    const c = this.listos.get(this.actual);
-    if (c) s += this.enAudio === this.actual ? Math.max(0, c.seg - this.audio.currentTime) : c.seg;
-    for (let i = this.actual + 1; i < this.actual + MAX_ADELANTE + 1 && this.listos.has(i); i++) s += this.listos.get(i).seg;
+    let desde = this.actual;
+    if (this.#bloqueCubre(this.actual)) {
+      s += Math.max(0, this.bloque.dur - this.audio.currentTime);
+      desde = this.bloque.fin + 1;
+    }
+    for (let i = desde; i < desde + MAX_ADELANTE && this.listos.has(i); i++) s += this.listos.get(i).seg;
     return s;
   }
 
   #siguienteSinGenerar() {
-    for (let i = this.actual; i < Math.min(this.total, this.actual + MAX_ADELANTE + 1); i++) {
+    const desde = this.#bloqueCubre(this.actual) ? this.bloque.fin + 1 : this.actual;
+    for (let i = desde; i < Math.min(this.total, this.actual + MAX_ADELANTE + 1); i++) {
       if (!this.listos.has(i)) return i;
     }
     return null;
@@ -453,6 +590,7 @@ export class Reproductor extends EventTarget {
     this.generando = true;
     try {
       while (this.sonando && this.doc) {
+        this.#seguirPosicion(); // con la app oculta, timeupdate puede no llegar
         const i = this.#siguienteSinGenerar();
         if (i == null || (i > this.actual && this.#segundosAdelante() > BUFFER_SEG)) {
           await esperar(700);
@@ -484,7 +622,6 @@ export class Reproductor extends EventTarget {
           this.#fallo(e, 'cargar');
           return;
         }
-        const st = await modulo();
         let r;
         const tGen = Date.now();
         try {
@@ -500,13 +637,16 @@ export class Reproductor extends EventTarget {
         }
         if (motor.backend === 'webgpu') this.fallosGpu = 0; // el respaldo es para fallos seguidos
         if (epoca !== this.epoca || !this.doc) continue;
+        this.sr = motor.sampleRate;
+        const pcm = recortar(r.pcm, this.sr);
+        const pausa = this.#pausa(i);
+        this.listos.set(i, { pcm, pausa, seg: pcm.length / this.sr + pausa });
         this.metrica.n++;
-        this.metrica.audio += r.segundos;
+        this.metrica.audio += pcm.length / this.sr;
         this.metrica.gen += (Date.now() - tGen) / 1000;
         this.metrica.backend = motor.backend;
-        const pausa = this.finParrafo.has(i) ? PAUSA_PARRAFO : PAUSA_ORACION;
-        this.listos.set(i, { url: URL.createObjectURL(st.wavBlob(r.pcm, motor.sampleRate, pausa)), seg: r.segundos + pausa });
-        if (i === this.actual && this.enAudio !== i && this.sonando) this.#reproducir(i);
+        // Si se estaba esperando esta oración (al partir, tras un salto o un corte), suena ya.
+        if (this.sonando && i === this.actual && !this.#bloqueCubre(i)) this.#sonarDesde(i);
       }
     } catch (e) {
       this.#fallo(e, 'ciclo');
@@ -515,19 +655,11 @@ export class Reproductor extends EventTarget {
     }
   }
 
-  // Suelta los audios que ya quedaron atrás o muy lejos de la posición actual.
+  // Suelta el audio de oraciones muy atrás o muy adelante de la posición actual.
   #podar() {
-    for (const [i, c] of this.listos) {
-      if (i < this.actual - 2 || i > this.actual + MAX_ADELANTE + 5) {
-        if (i !== this.enAudio) URL.revokeObjectURL(c.url);
-        this.listos.delete(i);
-      }
+    for (const i of this.listos.keys()) {
+      if (i < this.actual - HISTORIA || i > this.actual + MAX_ADELANTE + 5) this.listos.delete(i);
     }
-  }
-
-  #vaciar() {
-    for (const [i, c] of this.listos) if (i !== this.enAudio) URL.revokeObjectURL(c.url);
-    this.listos.clear();
   }
 
   #mediaSession() {

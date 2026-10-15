@@ -1,6 +1,6 @@
 import { listarDocs, leerDoc, leerContenido, guardarDocumento, actualizarDoc, borrarDocumento } from './db.js?v=1';
 import { importarArchivo, importarTextoPegado } from './importar.js?v=1';
-import { Reproductor } from './lectura.js?v=6';
+import { Reproductor } from './lectura.js?v=7';
 import { ajustesVoz, guardarAjustesVoz, cargarMotor, estaDescargado, borrarVoces, caidaAnterior, modulo } from './voz.js?v=4';
 import { anotar, textoRegistro, borrarRegistro, cantidadEventos } from './registro.js?v=2';
 import {
