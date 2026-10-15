@@ -30,8 +30,10 @@ export async function guardarAjustesVoz(cambios) {
   return nuevos;
 }
 
+// Listo si se cargó para este mismo pedido. Así, al volver de "cpu" a "auto" se recarga con
+// la tarjeta gráfica; y si "auto" terminó en el procesador (sin WebGPU), no se recarga en vano.
 export function motorListo(modelo, backend) {
-  return motor && motor.modeloId === modelo && (backend !== 'cpu' || motor.backend === 'wasm') ? motor : null;
+  return motor && motor.modeloId === modelo && motor.pedido === backend ? motor : null;
 }
 
 export async function estaDescargado(modelo) {
@@ -48,7 +50,14 @@ export async function cargarMotor({ modelo, backend }, alAvanzar) {
   cargando = (async () => {
     marcar({ modelo, backend });
     const m = await lib.Supertonic.cargar(modelo, { backend, alAvanzar });
-    await m.sintetizar('Hola.', 'es', 'F1', { pasos: 2 });
+    m.pedido = backend;
+    try {
+      await m.sintetizar('Hola.', 'es', 'F1', { pasos: 2 });
+    } catch (e) {
+      // Si la prueba falla (la gráfica sigue caída), se suelta lo cargado para no dejar memoria tomada.
+      await m.liberar().catch(() => {});
+      throw e;
+    }
     marcar(null);
     try { await navigator.storage?.persist?.(); } catch { /* opcional */ }
     motor = m;

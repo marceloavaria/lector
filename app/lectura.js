@@ -2,8 +2,9 @@
 // encadena los audios en un solo elemento <audio> (así sigue sonando con otra app en
 // pantalla) y avisa qué oración está sonando para resaltarla y guardarla.
 
-import { cargarMotor, modulo, motorListo, reiniciarMotor } from './voz.js?v=2';
+import { cargarMotor, modulo, motorListo, reiniciarMotor } from './voz.js?v=3';
 import { actualizarDoc } from './db.js?v=1';
+import { anotar } from './registro.js?v=1';
 
 const BUFFER_SEG = 90;     // segundos de audio generados por delante
 const MAX_ADELANTE = 60;   // oraciones generadas por delante, como tope
@@ -47,6 +48,9 @@ export class Reproductor extends EventTarget {
     this.temporizador = null;
     this.silencio = silencioUrl();
     this.ignorarPausaHasta = 0;
+    this.respaldoCpu = false;   // la gráfica falló: se genera con el procesador hasta volver a la app
+    this.espera = null;         // { tipo: 'arranque' | 'corte' | 'salto' | 'ajuste', t } mientras no hay audio
+    this.metrica = { n: 0, audio: 0, gen: 0, backend: '' };
 
     audio.addEventListener('ended', () => this.#alTerminar());
     audio.addEventListener('pause', () => {
@@ -54,17 +58,35 @@ export class Reproductor extends EventTarget {
       // Las pausas que provoca el propio reproductor al cambiar de audio se ignoran.
       if (audio.ended || !this.sonando || performance.now() < this.ignorarPausaHasta) return;
       this.sonando = false;
+      anotar('pausa', { motivo: 'sistema', oracion: this.actual }, { urgente: true });
       this.#estado('pausa');
       this.guardarYa();
     });
     audio.addEventListener('play', () => {
       if (!this.sonando && this.enAudio >= 0) {
         this.sonando = true;
+        anotar('play', { motivo: 'sistema', oracion: this.actual });
         this.#estado('sonando');
         this.#llenar();
       }
     });
     document.addEventListener('visibilitychange', () => { if (document.hidden) this.guardarYa(); });
+
+    // Cada minuto, una línea en el registro: cuánto se generó, con qué y cuánto queda por delante.
+    setInterval(() => {
+      const m = this.metrica;
+      if (!this.sonando && !m.n) return;
+      anotar('minuto', {
+        sonando: this.sonando ? 1 : 0,
+        oracion: this.actual,
+        generadas: m.n,
+        audio: Math.round(m.audio * 10) / 10,
+        gen: Math.round(m.gen * 10) / 10,
+        backend: m.backend || (this.respaldoCpu ? 'wasm' : ''),
+        adelante: Math.round(this.#segundosAdelante()),
+      });
+      this.metrica = { n: 0, audio: 0, gen: 0, backend: '' };
+    }, 60000);
   }
 
   get total() { return this.contenido?.oraciones.length || 0; }
@@ -84,6 +106,15 @@ export class Reproductor extends EventTarget {
     this.fallosGpu = 0;
     this.#mediaSession();
     this.#emitir('oracion', this.actual);
+  }
+
+  // La app volvió a la pantalla: si se estaba usando el procesador de respaldo, se vuelve a
+  // la tarjeta gráfica (los fallos suelen pasar con la app en segundo plano).
+  volverAGrafica() {
+    if (!this.respaldoCpu) return;
+    this.respaldoCpu = false;
+    this.fallosGpu = 0;
+    anotar('vuelve-gpu', {}, { urgente: true });
   }
 
   cerrar() {
@@ -107,6 +138,7 @@ export class Reproductor extends EventTarget {
     if (!this.doc) return;
     if (this.actual >= this.total - 1 && this.enAudio === this.actual && this.audio.ended) this.actual = 0;
     this.sonando = true;
+    anotar('play', { motivo: 'tú', oracion: this.actual });
     if (this.enAudio === this.actual && this.audio.src && !this.audio.ended) {
       this.audio.play().catch((e) => this.#fallo(e));
       this.#estado('sonando');
@@ -114,6 +146,7 @@ export class Reproductor extends EventTarget {
       return;
     }
     // Desbloquea el audio con un silencio mientras se genera la primera oración.
+    this.espera = { tipo: 'arranque', t: Date.now() };
     this.#cambiarFuente(this.silencio, -1);
     this.audio.play().catch(() => { /* se reintenta con la primera oración */ });
     if (this.listos.has(this.actual)) this.#reproducir(this.actual);
@@ -124,6 +157,8 @@ export class Reproductor extends EventTarget {
   pausar() {
     if (!this.sonando) return;
     this.sonando = false;
+    this.espera = null;
+    anotar('pausa', { motivo: 'tú', oracion: this.actual });
     this.#silenciarPausa();
     this.audio.pause();
     this.#estado('pausa');
@@ -152,6 +187,7 @@ export class Reproductor extends EventTarget {
     if (this.sonando) {
       if (this.listos.has(i)) this.#reproducir(i);
       else {
+        this.espera = { tipo: 'salto', t: Date.now() };
         this.#silenciarPausa();
         this.audio.pause();
         this.enAudio = -1;
@@ -190,6 +226,7 @@ export class Reproductor extends EventTarget {
     this.epoca++;
     this.#vaciar();
     if (this.sonando) {
+      this.espera = { tipo: 'ajuste', t: Date.now() };
       this.#silenciarPausa();
       this.audio.pause();
       this.enAudio = -1;
@@ -209,8 +246,17 @@ export class Reproductor extends EventTarget {
 
   // ---------- interno ----------
 
+  // Con el procesador de respaldo se baja a calidad media para que alcance a generar a tiempo.
+  #backendEfectivo() {
+    return this.respaldoCpu ? 'cpu' : this.ajustes.backend;
+  }
+
+  #pasosEfectivos() {
+    return this.respaldoCpu ? Math.min(this.ajustes.pasos, 5) : this.ajustes.pasos;
+  }
+
   #motorListo() {
-    return !!(this.ajustes && motorListo(this.ajustes.modelo, this.ajustes.backend));
+    return !!(this.ajustes && motorListo(this.ajustes.modelo, this.#backendEfectivo()));
   }
 
   #silenciarPausa() {
@@ -244,9 +290,25 @@ export class Reproductor extends EventTarget {
     }
   }
 
+  // Primer fallo seguido de la gráfica: se recarga el motor. Segundo: se usa el procesador
+  // como respaldo hasta que la app vuelva a la pantalla (ver volverAGrafica).
+  #falloGpu(e, cuando) {
+    this.fallosGpu++;
+    console.warn('Falló la tarjeta gráfica', cuando, e);
+    anotar('fallo-gpu', { n: this.fallosGpu, cuando, msg: String(e?.message || e).slice(0, 120) }, { urgente: true });
+    if (this.fallosGpu >= 2 && !this.respaldoCpu) {
+      this.respaldoCpu = true;
+      anotar('respaldo-cpu', { pasos: this.#pasosEfectivos() }, { urgente: true });
+      this.#emitir('aviso', 'La tarjeta gráfica falló. Sigo con el procesador hasta que vuelvas a la app.');
+    }
+    this.#estado('cargando-voz');
+  }
+
   #fallo(e) {
     if (e?.name === 'AbortError') return;
+    anotar('error', { msg: String(e?.message || e).slice(0, 160) }, { urgente: true });
     this.sonando = false;
+    this.espera = null;
     this.#estado('pausa');
     this.#emitir('error', e);
   }
@@ -262,6 +324,11 @@ export class Reproductor extends EventTarget {
       this.#estado('generando');
       this.#llenar();
       return;
+    }
+    if (this.espera) {
+      const seg = Math.round((Date.now() - this.espera.t) / 100) / 10;
+      anotar(this.espera.tipo === 'corte' ? 'corte-fin' : this.espera.tipo, { oracion: i, seg }, { urgente: this.espera.tipo === 'corte' });
+      this.espera = null;
     }
     this.#cambiarFuente(c.url, i);
     this.audio.defaultPlaybackRate = this.velocidad;
@@ -282,9 +349,15 @@ export class Reproductor extends EventTarget {
     }
     if (this.actual + 1 >= this.total) {
       this.sonando = false;
+      anotar('fin-documento', { oracion: this.actual });
       this.#estado('fin');
       this.guardarYa();
       return;
+    }
+    if (!this.listos.has(this.actual + 1)) {
+      // Un corte: terminó una oración y la siguiente aún no está generada.
+      this.espera = { tipo: 'corte', t: Date.now() };
+      anotar('corte-inicio', { oracion: this.actual + 1, backend: this.respaldoCpu ? 'wasm' : this.metrica.backend || '' }, { urgente: true });
     }
     this.#reproducir(this.actual + 1);
   }
@@ -315,34 +388,43 @@ export class Reproductor extends EventTarget {
           continue;
         }
         const epoca = this.epoca;
-        const { modelo, backend, voz, pasos } = this.ajustes;
+        const { modelo, voz } = this.ajustes;
+        const backend = this.#backendEfectivo();
+        const pasos = this.#pasosEfectivos();
         let motor;
         try {
+          const t0 = Date.now();
+          const listo = motorListo(modelo, backend);
           motor = await cargarMotor({ modelo, backend }, (p) => this.#emitir('voz', p));
+          if (!listo) anotar('motor-cargado', { backend: motor.backend, seg: Math.round((Date.now() - t0) / 100) / 10 });
         } catch (e) {
+          // Recargar el motor también prueba la gráfica: si sigue caída, cuenta como otro fallo.
+          if (backend !== 'cpu' && esFalloGpu(e)) {
+            this.#falloGpu(e, 'al cargar');
+            await esperar(500);
+            continue;
+          }
           this.#fallo(e);
           return;
         }
-        this.listoParaGenerar = `${modelo}/${backend}`;
         const st = await modulo();
         let r;
+        const tGen = Date.now();
         try {
           r = await motor.sintetizar(this.contenido.oraciones[i], this.doc.idioma, voz, { pasos });
         } catch (e) {
           if (epoca !== this.epoca || !this.doc) continue;
-          if (!esFalloGpu(e) || motor.backend !== 'webgpu' || this.fallosGpu >= 2) { this.#fallo(e); return; }
-          // Primera vez: se recarga el motor (desde el caché, unos segundos). Segunda: se pasa al procesador.
-          this.fallosGpu++;
-          console.warn('Falló la tarjeta gráfica, se reintenta', e);
+          if (!esFalloGpu(e) || motor.backend !== 'webgpu') { this.#fallo(e); return; }
+          this.#falloGpu(e, 'al generar');
           await reiniciarMotor();
-          if (this.fallosGpu >= 2) {
-            this.ajustes = { ...this.ajustes, backend: 'cpu' };
-            this.#emitir('aviso', 'La tarjeta gráfica falló dos veces. Sigo con el procesador, que es más lento.');
-          }
-          this.#estado('cargando-voz');
           continue;
         }
+        if (motor.backend === 'webgpu') this.fallosGpu = 0; // el respaldo es para fallos seguidos
         if (epoca !== this.epoca || !this.doc) continue;
+        this.metrica.n++;
+        this.metrica.audio += r.segundos;
+        this.metrica.gen += (Date.now() - tGen) / 1000;
+        this.metrica.backend = motor.backend;
         const pausa = this.finParrafo.has(i) ? PAUSA_PARRAFO : PAUSA_ORACION;
         this.listos.set(i, { url: URL.createObjectURL(st.wavBlob(r.pcm, motor.sampleRate, pausa)), seg: r.segundos + pausa });
         if (i === this.actual && this.enAudio !== i && this.sonando) this.#reproducir(i);

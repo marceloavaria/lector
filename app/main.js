@@ -1,7 +1,8 @@
 import { listarDocs, leerDoc, leerContenido, guardarDocumento, actualizarDoc, borrarDocumento } from './db.js?v=1';
 import { importarArchivo, importarTextoPegado } from './importar.js?v=1';
-import { Reproductor } from './lectura.js?v=3';
-import { ajustesVoz, guardarAjustesVoz, cargarMotor, estaDescargado, borrarVoces, caidaAnterior, modulo } from './voz.js?v=2';
+import { Reproductor } from './lectura.js?v=4';
+import { ajustesVoz, guardarAjustesVoz, cargarMotor, estaDescargado, borrarVoces, caidaAnterior, modulo } from './voz.js?v=3';
+import { anotar, textoRegistro, borrarRegistro, cantidadEventos } from './registro.js?v=1';
 import {
   sincronizar, configuracion, guardarConfiguracion, desconectar, probarConexion, ultimaSync,
   registrarBorrado, quitarBorrado, REPO_POR_DEFECTO, URL_CREAR_CLAVE,
@@ -466,6 +467,7 @@ async function abrirAjustes() {
   $('#aj-barra').hidden = true;
   await pintarNotaModelo();
   pintarEstadoSync();
+  pintarRegistro();
   mostrarVista('voz');
 }
 
@@ -606,6 +608,7 @@ async function correrSync() {
     return r;
   } catch (e) {
     errorSync = e.message || String(e);
+    anotar('sync-error', { msg: errorSync.slice(0, 120) });
     return null;
   } finally {
     pintarEstadoSync();
@@ -796,9 +799,18 @@ function conectar() {
     pintarEstadoSync();
   };
   document.addEventListener('visibilitychange', async () => {
+    anotar(document.hidden ? 'oculta' : 'visible', reproductor.doc ? { oracion: reproductor.actual } : {}, { urgente: document.hidden });
+    if (!document.hidden) reproductor.volverAGrafica();
     if (document.hidden) pedirSync(400); // sube la posición antes de que el teléfono duerma la app
     else if (Date.now() - (await ultimaSync()) > 60000) pedirSync(0);
   });
+
+  $('#btn-copiar-registro').onclick = copiarRegistro;
+  $('#btn-borrar-registro').onclick = () => {
+    if (!confirm('¿Borrar el registro del viaje?')) return;
+    borrarRegistro();
+    pintarRegistro();
+  };
 
   $('#btn-ajustes').onclick = abrirAjustes;
   $('#btn-descargar-voz').onclick = async () => { await abrirAjustes(); prepararVoz(); };
@@ -828,17 +840,53 @@ function conectar() {
       : 'Preparando la voz…';
   });
   reproductor.addEventListener('error', (e) => mostrarError('#error-lector', e.detail));
-  reproductor.addEventListener('aviso', async (e) => {
-    // El reproductor ya cambió al procesador; se guarda para que la próxima vez parta así.
-    ajustes = await guardarAjustesVoz({ backend: 'cpu' });
-    $('#aj-backend').value = 'cpu';
-    mostrarError('#error-lector', new Error(e.detail));
-  });
+  // Si la tarjeta gráfica falla, el reproductor usa el procesador solo hasta que vuelvas a la
+  // app (queda anotado en el registro del viaje). No se guarda como ajuste.
+}
+
+// ---------- registro del viaje ----------
+
+function pintarRegistro() {
+  const n = cantidadEventos();
+  $('#registro-nota').textContent = n
+    ? `${n} ${n === 1 ? 'evento anotado' : 'eventos anotados'} en este dispositivo.`
+    : 'Todavía no hay nada anotado.';
+}
+
+async function copiarRegistro() {
+  const voz = `Voz: ${ajustes.modelo} · ${nombreVoz(ajustes.voz)} · calidad ${ajustes.pasos} · ${fmtVel(ajustes.velocidad)} · procesamiento ${ajustes.backend}`;
+  const equipo = `Equipo: ${navigator.userAgent.match(/Version\/[\d.]+|Chrome\/[\d.]+|Edg\/[\d.]+/)?.[0] || 'navegador'} · ${matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'ícono' : 'pestaña'} · ${/iPhone|iPad/.test(navigator.userAgent) ? 'iPhone' : 'computador'}`;
+  const texto = textoRegistro(`${equipo}\n${voz}`);
+  const btn = $('#btn-copiar-registro');
+  try {
+    await navigator.clipboard.writeText(texto);
+    btn.textContent = 'Copiado ✓ Pégalo en el chat';
+  } catch {
+    // Sin permiso para el portapapeles: se muestra el texto seleccionado para copiarlo a mano.
+    const area = $('#registro-texto');
+    area.hidden = false;
+    area.value = texto;
+    area.select();
+    btn.textContent = 'Copia el texto de abajo';
+  }
+  setTimeout(() => { btn.textContent = 'Copiar registro'; }, 4000);
 }
 
 async function iniciar() {
   conectar();
   ajustes = await ajustesVoz();
+  anotar('inicio-app', {
+    version: 6,
+    modo: matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'icono' : 'pestaña',
+    modelo: ajustes.modelo,
+    backend: ajustes.backend,
+  }, { urgente: true });
+
+  // Una versión anterior guardaba "Solo procesador" después de dos fallos de la tarjeta
+  // gráfica y la app quedaba lenta para siempre. Una sola vez, se vuelve a "Automático".
+  if (!ajustes.migracionGpu) {
+    ajustes = await guardarAjustesVoz({ migracionGpu: 1, ...(ajustes.backend === 'cpu' ? { backend: 'auto' } : {}) });
+  }
 
   const caida = caidaAnterior();
   if (caida) {

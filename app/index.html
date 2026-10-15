@@ -582,6 +582,14 @@
         <span class="valor"><span id="sync-voz-valor"></span><svg><use href="#i-chevron"/></svg></span>
       </button>
     </div>
+    <h2 class="subtitulo">Registro del viaje</h2>
+    <div class="panel">
+      <p class="nota" style="margin-top:0">Mientras escuchas, la app anota los cortes, los fallos de la tarjeta gráfica y cuándo pasas a otra app. Después de manejar, toca <b>Copiar registro</b> y pégalo en el chat.</p>
+      <p class="nota" id="registro-nota"></p>
+      <button class="boton ancho" id="btn-copiar-registro">Copiar registro</button>
+      <textarea id="registro-texto" readonly hidden style="width:100%;min-height:200px;margin-top:10px;font:12px/1.4 ui-monospace,Menlo,monospace;background:var(--tarjeta-2);color:var(--texto);border:1px solid var(--borde);border-radius:10px;padding:10px"></textarea>
+      <button class="boton suave ancho" id="btn-borrar-registro">Borrar registro</button>
+    </div>
     <button class="boton peligro ancho" id="btn-borrar-voces" style="margin-top:20px">Borrar voces descargadas</button>
   </div>
 </section>
@@ -655,6 +663,6 @@
 <input type="file" id="archivo" accept=".pdf,.epub,.txt,.md,application/pdf,application/epub+zip,text/plain,text/markdown" hidden>
 <audio id="audio" preload="auto"></audio>
 
-<script type="module" src="main.js?v=5"></script>
+<script type="module" src="main.js?v=6"></script>
 </body>
 </html>
