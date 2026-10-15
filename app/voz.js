@@ -7,8 +7,8 @@ let motor = null;
 let cargando = Promise.resolve(); // cola de cargas (ver enTurno)
 
 export const AJUSTES_VOZ = {
-  modelo: 'v2',     // probado en el iPhone: 16x tiempo real con WebGPU
-  voz: 'M3',
+  modelo: 'v3q',    // elegido por Marcelo (15-10): liviano y probado en su iPhone
+  voz: 'F2',        // "Mujer 2", la que eligió
   pasos: 8,
   backend: 'auto',
   velocidad: 1,

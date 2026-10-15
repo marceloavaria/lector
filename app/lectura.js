@@ -3,7 +3,7 @@
 // solo uno por bloque, en un fin de párrafo). Suena en un solo elemento <audio>, así sigue
 // con otra app en pantalla, y avisa qué oración está sonando para resaltarla y guardarla.
 
-import { cargarMotor, motorListo, reiniciarMotor } from './voz.js?v=4';
+import { cargarMotor, motorListo, reiniciarMotor } from './voz.js?v=5';
 import { actualizarDoc } from './db.js?v=1';
 import { anotar } from './registro.js?v=2';
 

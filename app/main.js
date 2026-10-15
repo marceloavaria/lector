@@ -1,7 +1,7 @@
 import { listarDocs, leerDoc, leerContenido, guardarDocumento, actualizarDoc, borrarDocumento } from './db.js?v=1';
 import { importarArchivo, importarTextoPegado } from './importar.js?v=1';
-import { Reproductor } from './lectura.js?v=7';
-import { ajustesVoz, guardarAjustesVoz, cargarMotor, estaDescargado, borrarVoces, caidaAnterior, modulo } from './voz.js?v=4';
+import { Reproductor } from './lectura.js?v=8';
+import { ajustesVoz, guardarAjustesVoz, cargarMotor, estaDescargado, borrarVoces, caidaAnterior, modulo } from './voz.js?v=5';
 import { anotar, textoRegistro, borrarRegistro, cantidadEventos } from './registro.js?v=2';
 import {
   sincronizar, configuracion, guardarConfiguracion, desconectar, probarConexion, ultimaSync,
@@ -13,8 +13,8 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 const VELOCIDADES = [0.8, 1, 1.15, 1.25, 1.5, 1.75, 2, 2.5, 3];
 const CARACTERES_POR_SEGUNDO = 15; // ritmo aproximado de la voz a 1x, para estimar lo que falta
 const NOTAS_MODELO = {
-  v2: 'Probado en tu iPhone: genera unas 16 veces más rápido que escucharlo.',
-  v3q: 'Según sus autores lee con menos errores. Comprimido para que quepa en el iPhone; aún no lo probamos allá.',
+  v2: 'Pesa más (263 MB) y, según sus autores, lee con algo más de errores que el Supertonic 3.',
+  v3q: 'El recomendado: liviano (145 MB) y probado en iPhone, en español e inglés.',
   v3: 'La mejor calidad, pero no cabe en la memoria de Safari en el iPhone: úsalo solo en el computador.',
 };
 const MB_MODELO = { v2: 263, v3q: 145, v3: 398 };
@@ -876,7 +876,7 @@ async function iniciar() {
   conectar();
   ajustes = await ajustesVoz();
   anotar('inicio-app', {
-    version: 8,
+    version: 10,
     modo: matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'icono' : 'pestaña',
     modelo: ajustes.modelo,
     backend: ajustes.backend,
