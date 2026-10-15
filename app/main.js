@@ -1,6 +1,6 @@
 import { listarDocs, leerDoc, leerContenido, guardarDocumento, actualizarDoc, borrarDocumento } from './db.js?v=1';
 import { importarArchivo, importarTextoPegado } from './importar.js?v=1';
-import { Reproductor } from './lectura.js?v=4';
+import { Reproductor } from './lectura.js?v=5';
 import { ajustesVoz, guardarAjustesVoz, cargarMotor, estaDescargado, borrarVoces, caidaAnterior, modulo } from './voz.js?v=3';
 import { anotar, textoRegistro, borrarRegistro, cantidadEventos } from './registro.js?v=1';
 import {
@@ -759,8 +759,8 @@ function conectar() {
     pintarBiblioteca();
   };
   $('#btn-play').onclick = () => reproductor.alternar();
-  $('#btn-anterior').onclick = () => { ultimoScrollUsuario = 0; reproductor.anterior(); };
-  $('#btn-siguiente').onclick = () => { ultimoScrollUsuario = 0; reproductor.siguiente(); };
+  $('#btn-anterior').onclick = () => { ultimoScrollUsuario = 0; reproductor.retroceder(); };
+  $('#btn-siguiente').onclick = () => { ultimoScrollUsuario = 0; reproductor.avanzar(); };
   $('#btn-velocidad').onclick = cambiarVelocidad;
   $('#btn-idioma').onclick = () => { if (docAbierto) alternarIdioma(docAbierto); };
   $('#secciones').onchange = (e) => irASeccion(parseInt(e.target.value, 10));

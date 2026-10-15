@@ -351,6 +351,9 @@
     <symbol id="i-pausa" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></symbol>
     <symbol id="i-ant" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></symbol>
     <symbol id="i-sig" viewBox="0 0 24 24" fill="currentColor"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></symbol>
+    <!-- Flechas circulares de Feather Icons (MIT) con "15" adentro, como en los podcasts -->
+    <symbol id="i-menos15" viewBox="-1 -1 26 26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/><text x="12.6" y="15.4" text-anchor="middle" font-size="8" font-weight="700" fill="currentColor" stroke="none">15</text></symbol>
+    <symbol id="i-mas15" viewBox="-1 -1 26 26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/><text x="11.4" y="15.4" text-anchor="middle" font-size="8" font-weight="700" fill="currentColor" stroke="none">15</text></symbol>
     <symbol id="i-volver" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></symbol>
     <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></symbol>
     <symbol id="i-archivo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 18v-6M9.5 14.5 12 12l2.5 2.5"/></symbol>
@@ -499,12 +502,12 @@
       <div id="rep-estado"></div>
       <div class="controles">
         <button class="chip" id="btn-velocidad" aria-label="Velocidad">1x</button>
-        <button class="control" id="btn-anterior" aria-label="Oración anterior"><svg><use href="#i-ant"/></svg></button>
+        <button class="control" id="btn-anterior" aria-label="Retroceder 15 segundos"><svg><use href="#i-menos15"/></svg></button>
         <button class="control" id="btn-play" aria-label="Reproducir">
           <svg id="icono-play"><use href="#i-play"/></svg>
           <svg id="icono-pausa" hidden><use href="#i-pausa"/></svg>
         </button>
-        <button class="control" id="btn-siguiente" aria-label="Oración siguiente"><svg><use href="#i-sig"/></svg></button>
+        <button class="control" id="btn-siguiente" aria-label="Adelantar 15 segundos"><svg><use href="#i-mas15"/></svg></button>
         <button class="chip" id="btn-idioma" aria-label="Idioma del documento">ES</button>
       </div>
     </div>
@@ -663,6 +666,6 @@
 <input type="file" id="archivo" accept=".pdf,.epub,.txt,.md,application/pdf,application/epub+zip,text/plain,text/markdown" hidden>
 <audio id="audio" preload="auto"></audio>
 
-<script type="module" src="main.js?v=6"></script>
+<script type="module" src="main.js?v=7"></script>
 </body>
 </html>

@@ -10,6 +10,8 @@ const BUFFER_SEG = 90;     // segundos de audio generados por delante
 const MAX_ADELANTE = 60;   // oraciones generadas por delante, como tope
 const PAUSA_ORACION = 0.18;
 const PAUSA_PARRAFO = 0.55;
+const SALTO_SEG = 15;            // botones 15− y 15+
+const CARACTERES_POR_SEG = 14;   // ritmo de la voz a 1x, para estimar oraciones aún no generadas
 
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -204,6 +206,42 @@ export class Reproductor extends EventTarget {
 
   siguiente() { this.irA(this.actual + 1); }
 
+  // Saltos de 15 segundos de audio, como en los podcasts. Si el punto cae dentro de la oración
+  // que suena, se mueve ahí mismo; si no, se va al comienzo de la oración donde cae (así no
+  // se retoma a mitad de frase).
+  retroceder(seg = SALTO_SEG) {
+    if (!this.doc) return;
+    const enCurso = this.enAudio === this.actual ? this.audio.currentTime : 0;
+    if (enCurso >= seg) {
+      this.audio.currentTime = enCurso - seg;
+      return;
+    }
+    let falta = seg - enCurso;
+    let i = this.actual;
+    while (i > 0 && falta > 0) {
+      i--;
+      falta -= this.#duracion(i);
+    }
+    this.irA(i);
+  }
+
+  avanzar(seg = SALTO_SEG) {
+    if (!this.doc) return;
+    const enCurso = this.enAudio === this.actual ? this.audio.currentTime : 0;
+    const quedan = Math.max(0, this.#duracion(this.actual) - enCurso);
+    if (this.enAudio === this.actual && quedan > seg + 0.5) {
+      this.audio.currentTime = enCurso + seg;
+      return;
+    }
+    let falta = seg - quedan;
+    let i = this.actual + 1;
+    while (i < this.total - 1 && falta > this.#duracion(i)) {
+      falta -= this.#duracion(i);
+      i++;
+    }
+    this.irA(Math.min(i, this.total - 1));
+  }
+
   anterior() {
     if (this.sonando && this.enAudio === this.actual && this.audio.currentTime > 2) {
       this.audio.currentTime = 0;
@@ -362,6 +400,14 @@ export class Reproductor extends EventTarget {
     this.#reproducir(this.actual + 1);
   }
 
+  // Duración de una oración: la real si ya está generada; si no, estimada por su largo.
+  #duracion(i) {
+    const c = this.listos.get(i);
+    if (c) return c.seg;
+    const largo = this.contenido?.oraciones[i]?.length || 0;
+    return largo / CARACTERES_POR_SEG + (this.finParrafo.has(i) ? PAUSA_PARRAFO : PAUSA_ORACION);
+  }
+
   #segundosAdelante() {
     let s = 0;
     const c = this.listos.get(this.actual);
@@ -471,9 +517,11 @@ export class Reproductor extends EventTarget {
     const poner = (accion, fn) => { try { ms.setActionHandler(accion, fn); } catch { /* no soportado */ } };
     poner('play', () => this.play());
     poner('pause', () => this.pausar());
-    poner('previoustrack', () => this.anterior());
-    poner('nexttrack', () => this.siguiente());
-    poner('seekbackward', () => this.anterior());
-    poner('seekforward', () => this.siguiente());
+    // Sin "pista anterior/siguiente": así la pantalla bloqueada muestra los botones de
+    // retroceder y adelantar 15 s, como en los podcasts.
+    poner('previoustrack', null);
+    poner('nexttrack', null);
+    poner('seekbackward', (d) => this.retroceder(d?.seekOffset || SALTO_SEG));
+    poner('seekforward', (d) => this.avanzar(d?.seekOffset || SALTO_SEG));
   }
 }
