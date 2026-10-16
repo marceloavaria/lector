@@ -90,6 +90,12 @@ function resumirSesion(evs) {
   L.push(`- Cortes esperando la voz: ${cortes.length}${sinCerrar > 0 ? ` (+${sinCerrar} sin terminar)` : ''}${cortes.length ? ` · ${dur(segCortes)} en total, el más largo ${dur(maxCorte)}` : ''}`);
   L.push(`- Fallos de la tarjeta gráfica: ${fallos.length}${fallos.length ? ` (${fallos.filter((e) => e.o).length} con la app oculta)` : ''} · con procesador de respaldo: ${dur(respaldo / 1000)}`);
   L.push(`- Velocidad de generación: gráfica ${velocidad((e) => e.backend === 'webgpu')} (oculta ${velocidad((e) => e.backend === 'webgpu' && e.o)}) · procesador ${velocidad((e) => e.backend === 'wasm')}`);
+  const calidad = evs.filter((e) => e.tipo === 'calidad-auto' || e.tipo === 'no-alcanza');
+  if (calidad.length) {
+    L.push(`- Calidad automática: ${calidad.map((e) => (e.tipo === 'no-alcanza'
+      ? `no alcanza ni con ${e.pasos} pasos (${coma(e.ritmo)}x)`
+      : `${e.de}→${e.a} pasos (generaba a ${coma(e.ritmo)}x)`)).join(' · ')}`);
+  }
   L.push(`- Pausas del sistema (llamadas, Siri, otra app): ${pausasSistema} · errores: ${errores.length}`);
   return L;
 }

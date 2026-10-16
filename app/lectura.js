@@ -3,9 +3,9 @@
 // solo uno por bloque, en un fin de párrafo). Suena en un solo elemento <audio>, así sigue
 // con otra app en pantalla, y avisa qué oración está sonando para resaltarla y guardarla.
 
-import { cargarMotor, motorListo, reiniciarMotor } from './voz.js?v=5';
+import { cargarMotor, motorListo, reiniciarMotor } from './voz.js?v=6';
 import { actualizarDoc } from './db.js?v=1';
-import { anotar } from './registro.js?v=2';
+import { anotar } from './registro.js?v=3';
 
 const BUFFER_SEG = 150;          // segundos de audio generados por delante
 const MAX_ADELANTE = 100;        // oraciones generadas por delante, como tope
@@ -23,6 +23,14 @@ const PAUSA_PARRAFO = 0.55;
 const PAUSA_CORTE = 0.04;        // una oración larga partida en una coma o entre palabras
 const SALTO_SEG = 15;            // botones 15− y 15+
 const CARACTERES_POR_SEG = 15;   // ritmo de la voz a 1x, para estimar oraciones aún no generadas
+// Calidad automática: si el equipo genera más lento de lo que suena y ya casi no queda audio
+// por delante, la calidad baja un nivel (Alta → Media → Rápida), solo por esta sesión.
+// En el iPhone se genera a 2–3,6x, así que ahí no se activa; en un PC lento (0,3x) sí.
+const NIVELES_CALIDAD = [8, 5, 3];
+const RITMO_AUDIO_SEG = 30;      // se mide con 30 s de audio generado…
+const RITMO_GEN_SEG = 45;        // …o con 45 s generando (en un equipo muy lento, para no esperar tanto)
+const RITMO_MARGEN = 1.15;       // hay que generar al menos un 15% más rápido de lo que suena
+const HOLGURA_SEG = 30;          // y solo se baja si quedan menos de 30 s de escucha por delante
 
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -84,6 +92,9 @@ export class Reproductor extends EventTarget {
     this.silencio = silencioUrl();
     this.ignorarPausaHasta = 0;
     this.respaldoCpu = false;   // la gráfica falló: se genera con el procesador hasta volver a la app
+    this.topePasos = null;      // calidad automática: tope de pasos en esta sesión (ver #medirRitmo)
+    this.noAlcanza = false;     // ni con la calidad más baja alcanza a generar a tiempo
+    this.ritmo = { clave: '', audio: 0, gen: 0, n: 0 };
     this.reintentos = new Set(); // bloques que ya se rehicieron una vez por no poder sonar
     this.espera = null;         // { tipo: 'arranque' | 'corte' | 'salto' | 'ajuste' | 'reintento', t }
     this.metrica = { n: 0, audio: 0, gen: 0, backend: '' };
@@ -301,6 +312,12 @@ export class Reproductor extends EventTarget {
 
   // Cambió la voz, la calidad o el idioma: lo generado ya no sirve.
   cambiarAjustes(ajustes, idioma) {
+    // Si elegiste otra calidad, modelo o procesamiento, la calidad automática vuelve a medir.
+    const antes = this.ajustes;
+    if (!antes || antes.pasos !== ajustes.pasos || antes.modelo !== ajustes.modelo || antes.backend !== ajustes.backend) {
+      this.topePasos = null;
+      this.noAlcanza = false;
+    }
     this.ajustes = ajustes;
     if (idioma && this.doc) this.doc = { ...this.doc, idioma };
     this.cambiarVelocidad(ajustes.velocidad || this.velocidad);
@@ -335,7 +352,39 @@ export class Reproductor extends EventTarget {
   }
 
   #pasosEfectivos() {
-    return this.respaldoCpu ? Math.min(this.ajustes.pasos, 5) : this.ajustes.pasos;
+    let pasos = this.ajustes.pasos;
+    if (this.respaldoCpu) pasos = Math.min(pasos, 5);
+    if (this.topePasos) pasos = Math.min(pasos, this.topePasos);
+    return pasos;
+  }
+
+  // Calidad automática (ver NIVELES_CALIDAD). Mide cuántos segundos de audio salen por segundo
+  // generando, con la calidad y el motor de ahora. Un tropiezo aislado de la gráfica no baja la
+  // calidad si todavía queda audio por delante: solo cuando el ritmo no alcanza y se está por cortar.
+  #medirRitmo(motor, pasos, audio, gen) {
+    if (this.respaldoCpu) return; // el respaldo ya tiene su calidad y dura hasta volver a la app
+    const clave = `${motor.modeloId}|${motor.backend}|${pasos}`;
+    if (this.ritmo.clave !== clave) this.ritmo = { clave, audio: 0, gen: 0, n: 0 };
+    const r = this.ritmo;
+    r.audio += audio;
+    r.gen += gen;
+    r.n++;
+    if (r.n < 3 || (r.audio < RITMO_AUDIO_SEG && r.gen < RITMO_GEN_SEG)) return;
+    this.ritmo = { clave, audio: 0, gen: 0, n: 0 }; // la próxima medición parte de cero
+    const ritmo = r.audio / Math.max(0.001, r.gen);
+    const holgura = this.#segundosAdelante() / this.velocidad;
+    if (ritmo >= this.velocidad * RITMO_MARGEN || holgura >= HOLGURA_SEG) return;
+    const datos = { ritmo: Math.round(ritmo * 100) / 100, vel: this.velocidad, holgura: Math.round(holgura) };
+    const menor = NIVELES_CALIDAD.find((p) => p < pasos);
+    if (!menor) {
+      if (this.noAlcanza) return;
+      this.noAlcanza = true;
+      anotar('no-alcanza', { pasos, ...datos }, { urgente: true });
+    } else {
+      this.topePasos = menor;
+      anotar('calidad-auto', { de: pasos, a: menor, ...datos }, { urgente: true });
+    }
+    this.#emitir('calidad', { pasos: this.#pasosEfectivos(), noAlcanza: this.noAlcanza });
   }
 
   #motorListo() {
@@ -641,10 +690,12 @@ export class Reproductor extends EventTarget {
         const pcm = recortar(r.pcm, this.sr);
         const pausa = this.#pausa(i);
         this.listos.set(i, { pcm, pausa, seg: pcm.length / this.sr + pausa });
+        const gen = (Date.now() - tGen) / 1000;
         this.metrica.n++;
         this.metrica.audio += pcm.length / this.sr;
-        this.metrica.gen += (Date.now() - tGen) / 1000;
+        this.metrica.gen += gen;
         this.metrica.backend = motor.backend;
+        this.#medirRitmo(motor, pasos, this.listos.get(i).seg, gen);
         // Si se estaba esperando esta oración (al partir, tras un salto o un corte), suena ya.
         if (this.sonando && i === this.actual && !this.#bloqueCubre(i)) this.#sonarDesde(i);
       }

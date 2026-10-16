@@ -6,13 +6,46 @@ let st = null;
 let motor = null;
 let cargando = Promise.resolve(); // cola de cargas (ver enTurno)
 
+// Celular o tablet (el iPad se presenta como Mac, pero tiene pantalla táctil).
+const ua = navigator.userAgent;
+export const ES_MOVIL = /iPhone|iPad|iPod|Android/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+
+export function tipoEquipo() {
+  if (/iPhone|iPod/.test(ua)) return 'iPhone';
+  if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'iPad';
+  if (/Android/i.test(ua)) return 'Android';
+  return 'computador';
+}
+
+// Lo mejor para cada equipo, con la voz que eligió Marcelo ("Mujer 2"):
+// - celular: Supertonic 3 liviano (145 MB, cabe en la memoria de Safari en el iPhone);
+// - computador con WebGPU: Supertonic 3 completo (398 MB, misma voz sin comprimir): corre entero
+//   en la tarjeta gráfica y es varias veces más rápido que el liviano (en el PC de un amigo el
+//   liviano fue a 0,3x tiempo real);
+// - computador sin WebGPU: el liviano, que en el procesador es el más rápido.
+// revisarGrafica() lo confirma al abrir la app: hay navegadores con WebGPU pero sin una tarjeta
+// gráfica que puedan usar (drivers viejos o bloqueados).
+export let MODELO_RECOMENDADO = ES_MOVIL || !('gpu' in navigator) ? 'v3q' : 'v3';
+
 export const AJUSTES_VOZ = {
-  modelo: 'v3q',    // elegido por Marcelo (15-10): liviano y probado en su iPhone
-  voz: 'F2',        // "Mujer 2", la que eligió
+  modelo: MODELO_RECOMENDADO,
+  voz: 'F2',
   pasos: 8,
   backend: 'auto',
   velocidad: 1,
 };
+
+export async function revisarGrafica() {
+  if (MODELO_RECOMENDADO !== 'v3') return;
+  let adaptador = null;
+  try {
+    adaptador = await Promise.race([
+      navigator.gpu.requestAdapter(),
+      new Promise((r) => setTimeout(() => r(null), 3000)),
+    ]);
+  } catch { /* sin WebGPU */ }
+  if (!adaptador) MODELO_RECOMENDADO = AJUSTES_VOZ.modelo = 'v3q';
+}
 
 export async function modulo() {
   if (!st) st = await import('../supertonic.js?v=5');

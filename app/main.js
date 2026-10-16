@@ -1,8 +1,8 @@
 import { listarDocs, leerDoc, leerContenido, guardarDocumento, actualizarDoc, borrarDocumento } from './db.js?v=1';
 import { importarArchivo, importarTextoPegado } from './importar.js?v=1';
-import { Reproductor } from './lectura.js?v=8';
-import { ajustesVoz, guardarAjustesVoz, cargarMotor, estaDescargado, borrarVoces, caidaAnterior, modulo } from './voz.js?v=5';
-import { anotar, textoRegistro, borrarRegistro, cantidadEventos } from './registro.js?v=2';
+import { Reproductor } from './lectura.js?v=9';
+import { ajustesVoz, guardarAjustesVoz, cargarMotor, estaDescargado, borrarVoces, caidaAnterior, modulo, ES_MOVIL, MODELO_RECOMENDADO, tipoEquipo, revisarGrafica } from './voz.js?v=6';
+import { anotar, textoRegistro, borrarRegistro, cantidadEventos } from './registro.js?v=3';
 import {
   sincronizar, configuracion, guardarConfiguracion, desconectar, probarConexion, ultimaSync,
   registrarBorrado, quitarBorrado, REPO_POR_DEFECTO, URL_CREAR_CLAVE,
@@ -14,10 +14,11 @@ const VELOCIDADES = [0.8, 1, 1.15, 1.25, 1.5, 1.75, 2, 2.5, 3];
 const CARACTERES_POR_SEGUNDO = 15; // ritmo aproximado de la voz a 1x, para estimar lo que falta
 const NOTAS_MODELO = {
   v2: 'Pesa más (263 MB) y, según sus autores, lee con algo más de errores que el Supertonic 3.',
-  v3q: 'El recomendado: liviano (145 MB) y probado en iPhone, en español e inglés.',
-  v3: 'La mejor calidad, pero no cabe en la memoria de Safari en el iPhone: úsalo solo en el computador.',
+  v3q: 'El recomendado en celular: liviano (145 MB) y probado en iPhone, en español e inglés.',
+  v3: 'El recomendado en computadores con tarjeta gráfica: la misma voz sin comprimir y varias veces más rápido (398 MB). En el iPhone no cabe en la memoria de Safari.',
 };
 const MB_MODELO = { v2: 263, v3q: 145, v3: 398 };
+const NOMBRE_CALIDAD = { 8: 'Alta', 5: 'Media', 3: 'Rápida' };
 const MUESTRA_VOZ = {
   es: 'Hola. Esta es la voz con la que vas a escuchar tus libros. ¿Te gusta cómo suena?',
   en: "Hi. This is the voice you'll hear your books in. Do you like how it sounds?",
@@ -473,8 +474,17 @@ async function abrirAjustes() {
 
 async function pintarNotaModelo() {
   const descargado = await estaDescargado(ajustes.modelo).catch(() => false);
-  $('#aj-nota-modelo').textContent = `${NOTAS_MODELO[ajustes.modelo]} ${descargado ? 'Ya está descargado en este dispositivo.' : `Falta descargarlo (${MB_MODELO[ajustes.modelo]} MB).`}`;
+  $('#aj-nota-modelo').textContent = `${NOTAS_MODELO[ajustes.modelo]} ${descargado ? 'Ya está descargado en este dispositivo.' : `Falta descargarlo (${MB_MODELO[ajustes.modelo]} MB).`}${notaCalidad()}`;
   $('#btn-preparar-voz').textContent = descargado ? 'Preparar ahora' : `Descargar (${MB_MODELO[ajustes.modelo]} MB)`;
+}
+
+// Calidad automática del reproductor (lectura.js): se avisa aquí, junto a la calidad elegida.
+function notaCalidad() {
+  if (reproductor.noAlcanza) return ' Este equipo no alcanza a generar la voz a tiempo, ni en calidad Rápida: habrá pausas mientras genera.';
+  if (reproductor.topePasos && reproductor.topePasos < ajustes.pasos) {
+    return ` Este equipo no alcanzaba a generar la voz a tiempo: en esta sesión la calidad bajó sola a ${NOMBRE_CALIDAD[reproductor.topePasos]}.`;
+  }
+  return '';
 }
 
 async function cambiarAjuste() {
@@ -840,6 +850,7 @@ function conectar() {
       : 'Preparando la voz…';
   });
   reproductor.addEventListener('error', (e) => mostrarError('#error-lector', e.detail));
+  reproductor.addEventListener('calidad', () => { if (vistaActual === 'voz') pintarNotaModelo(); });
   // Si la tarjeta gráfica falla, el reproductor usa el procesador solo hasta que vuelvas a la
   // app (queda anotado en el registro del viaje). No se guarda como ajuste.
 }
@@ -855,7 +866,7 @@ function pintarRegistro() {
 
 async function copiarRegistro() {
   const voz = `Voz: ${ajustes.modelo} · ${nombreVoz(ajustes.voz)} · calidad ${ajustes.pasos} · ${fmtVel(ajustes.velocidad)} · procesamiento ${ajustes.backend}`;
-  const equipo = `Equipo: ${navigator.userAgent.match(/Version\/[\d.]+|Chrome\/[\d.]+|Edg\/[\d.]+/)?.[0] || 'navegador'} · ${matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'ícono' : 'pestaña'} · ${/iPhone|iPad/.test(navigator.userAgent) ? 'iPhone' : 'computador'}`;
+  const equipo = `Equipo: ${navigator.userAgent.match(/Version\/[\d.]+|Chrome\/[\d.]+|Edg\/[\d.]+/)?.[0] || 'navegador'} · ${matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'ícono' : 'pestaña'} · ${tipoEquipo()}`;
   const texto = textoRegistro(`${equipo}\n${voz}`);
   const btn = $('#btn-copiar-registro');
   try {
@@ -874,9 +885,11 @@ async function copiarRegistro() {
 
 async function iniciar() {
   conectar();
+  await revisarGrafica();
   ajustes = await ajustesVoz();
   anotar('inicio-app', {
-    version: 10,
+    version: 11,
+    equipo: tipoEquipo(),
     modo: matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'icono' : 'pestaña',
     modelo: ajustes.modelo,
     backend: ajustes.backend,
@@ -889,17 +902,26 @@ async function iniciar() {
     ajustes = await guardarAjustesVoz({ migracionGpu: 2, ...(ajustes.backend === 'cpu' ? { backend: 'auto' } : {}) });
   }
 
-  // La página se cerró mientras cargaba la voz. Con el modelo grande es memoria y se cambia al
-  // Supertonic 2. Con los demás puede ser memoria o solo una recarga: por esta vez se usa el
-  // procesador (gasta menos memoria), sin guardarlo; al volver a la app se intenta la gráfica.
+  // En computadores el modelo completo (misma voz, sin comprimir) es varias veces más rápido que
+  // el liviano. Los computadores que quedaron con el liviano por defecto se pasan una vez.
+  if (!ES_MOVIL && (ajustes.migracionPc || 0) < 1) {
+    ajustes = await guardarAjustesVoz({ migracionPc: 1, ...(ajustes.modelo === 'v3q' ? { modelo: MODELO_RECOMENDADO } : {}) });
+  }
+
+  // La página se cerró mientras cargaba la voz. Con el modelo completo es memoria y se cambia al
+  // liviano (misma voz). Con los demás puede ser memoria o solo una recarga: por esta vez se usa
+  // el procesador (gasta menos memoria), sin guardarlo; al volver a la app se intenta la gráfica.
+  // En el computador, si la voz no alcanzó a bajarse entera, lo normal es que se cerró la pestaña
+  // durante la descarga: no se cambia nada.
   const caida = caidaAnterior();
+  let avisoCaida = null;
   if (caida) {
     anotar('caida-al-cargar', { modelo: caida.modelo, backend: caida.backend }, { urgente: true });
-    if (caida.modelo === 'v3') {
-      ajustes = await guardarAjustesVoz({ modelo: 'v2' });
-      mostrarError('#error-biblioteca', new Error(
-        'La última vez la app se cerró mientras preparaba el modelo grande, probablemente por falta de memoria. Cambié a Supertonic 2.',
-      ));
+    if (!ES_MOVIL && !(await estaDescargado(caida.modelo).catch(() => false))) {
+      // se vuelve a descargar al escuchar
+    } else if (caida.modelo === 'v3') {
+      ajustes = await guardarAjustesVoz({ modelo: 'v3q' });
+      avisoCaida = 'La última vez la app se cerró mientras preparaba la voz completa, probablemente por falta de memoria. Cambié a la versión liviana (la misma voz).';
     } else if (caida.backend !== 'cpu') {
       reproductor.respaldoCpu = true;
     }
@@ -907,6 +929,8 @@ async function iniciar() {
 
   cargarNombresVoces().catch(() => {});
   await pintarBiblioteca();
+  // Después de pintar la biblioteca, que limpia los errores anteriores.
+  if (avisoCaida) mostrarError('#error-biblioteca', new Error(avisoCaida));
   pintarEstadoSync();
   syncInicial = correrSync().finally(() => { syncInicial = null; });
 
