@@ -149,6 +149,7 @@ async function leerPdf(bytes, alAvanzar) {
   }
   const umbral = Math.max(3, paginas.length * 0.3);
   const esRuido = (l, k, total) => {
+    if (/^\s*docusign envelope id\b/i.test(l.texto)) return true; // el sello de DocuSign de cada página
     const borde = k < 2 || k >= total - 2;
     if (borde && (repetidas.get(firma(l.texto)) || 0) >= umbral) return true;
     return borde && /^[\divxlcIVXLC\s.\-–|/]+$/.test(l.texto) && l.texto.length <= 12;

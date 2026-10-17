@@ -12,6 +12,7 @@
 import { cargarMotor, motorListo, reiniciarMotor } from './voz.js?v=6';
 import { actualizarDoc } from './db.js?v=1';
 import { anotar } from './registro.js?v=4';
+import { paraVoz, detectarFormato } from './numeros.js?v=1';
 
 const BUFFER_SEG = 150;          // segundos de audio generados por delante
 const MAX_ADELANTE = 100;        // oraciones generadas por delante, como tope
@@ -179,6 +180,7 @@ export class Reproductor extends EventTarget {
     this.reintentos = new Set();
     this.finParrafo = new Set(contenido.parrafos.slice(1).map((p) => p - 1));
     this.finParrafo.add(this.total - 1);
+    this.formatoNumeros = detectarFormato(contenido.oraciones, doc.idioma); // 1.234,5 o 1,234.5
     this.fallosGpu = 0;
     this.#mediaSession();
     this.#emitir('oracion', this.actual);
@@ -350,7 +352,10 @@ export class Reproductor extends EventTarget {
       this.noAlcanza = false;
     }
     this.ajustes = ajustes;
-    if (idioma && this.doc) this.doc = { ...this.doc, idioma };
+    if (idioma && this.doc) {
+      this.doc = { ...this.doc, idioma };
+      this.formatoNumeros = detectarFormato(this.contenido.oraciones, idioma);
+    }
     this.cambiarVelocidad(ajustes.velocidad || this.velocidad);
     this.epoca++;
     this.listos.clear();
@@ -884,6 +889,14 @@ export class Reproductor extends EventTarget {
           continue;
         }
         const epoca = this.epoca;
+        // Números, montos y fechas van en palabras (ver numeros.js).
+        const texto = paraVoz(this.contenido.oraciones[i], this.doc.idioma, this.formatoNumeros);
+        if (!/[\p{L}\p{N}]/u.test(texto)) {
+          // Nada que leer (por ejemplo, solo la línea de DocuSign): un silencio breve.
+          this.listos.set(i, { pcm: new Int16Array(Math.round(0.05 * this.sr)), pausa: 0, seg: 0.05 });
+          if (this.sonando && i === this.actual && !this.#bloqueCubre(i)) this.#sonarDesde(i);
+          continue;
+        }
         const { modelo, voz } = this.ajustes;
         const backend = this.#backendEfectivo();
         const pasos = this.#pasosEfectivos();
@@ -912,7 +925,7 @@ export class Reproductor extends EventTarget {
         let r;
         const tGen = Date.now();
         try {
-          r = await motor.sintetizar(this.contenido.oraciones[i], this.doc.idioma, voz, { pasos });
+          r = await motor.sintetizar(texto, this.doc.idioma, voz, { pasos });
         } catch (e) {
           if (epoca !== this.epoca || !this.doc) continue;
           // Se soltó el motor para cargar otro (cambio de voz, respaldo): se usa el nuevo.
