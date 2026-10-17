@@ -1,18 +1,24 @@
 // Reproductor: genera la voz oración por oración un poco por delante de lo que suena y la
 // junta en bloques continuos de ~1 minuto (así no hay un cambio de archivo entre oraciones,
-// solo uno por bloque, en un fin de párrafo). Suena en un solo elemento <audio>, así sigue
-// con otra app en pantalla, y avisa qué oración está sonando para resaltarla y guardarla.
+// solo uno por bloque, en un fin de párrafo). Suena en elementos <audio>, así sigue con otra
+// app en pantalla, y avisa qué oración está sonando para resaltarla y guardarla.
+//
+// Con la pantalla bloqueada, iOS duerme la app en cuanto deja de sonar algo. Por eso nunca se
+// deja un momento sin audio: el bloque siguiente se precarga en un segundo <audio> y se pasa a
+// él sin espera, y mientras se espera la voz (al partir, tras un salto o un corte) suena un
+// silencio en bucle. Antes, al cambiar de bloque, el iPhone a veces se dormía y quedaba callado
+// (registro del 15-10: 3 silencios de 2 a 5 minutos en 20 minutos con la pantalla bloqueada).
 
 import { cargarMotor, motorListo, reiniciarMotor } from './voz.js?v=6';
 import { actualizarDoc } from './db.js?v=1';
-import { anotar } from './registro.js?v=3';
+import { anotar } from './registro.js?v=4';
 
 const BUFFER_SEG = 150;          // segundos de audio generados por delante
 const MAX_ADELANTE = 100;        // oraciones generadas por delante, como tope
 const HISTORIA = 20;             // oraciones ya escuchadas que se guardan para retroceder rápido
 const BLOQUE_MIN_SEG = 60;       // un bloque termina en el primer fin de párrafo después de esto…
 const BLOQUE_MAX_SEG = 150;      // …o en el primer fin de oración después de esto
-const PAUSA_FIN_BLOQUE = 0.1;    // el cambio de un bloque al siguiente ya agrega su propia pausa
+const PAUSA_FIN_BLOQUE = 0.1;    // con un solo <audio>, el cambio de bloque ya agrega su propia pausa
 // La voz trae ~0,6 s de silencio al comienzo y al final de cada oración: se recorta y se
 // pone una pausa propia, natural y pareja.
 const UMBRAL_VOZ = 0.01;         // ~ -40 dB: por debajo es silencio
@@ -23,6 +29,10 @@ const PAUSA_PARRAFO = 0.55;
 const PAUSA_CORTE = 0.04;        // una oración larga partida en una coma o entre palabras
 const SALTO_SEG = 15;            // botones 15− y 15+
 const CARACTERES_POR_SEG = 15;   // ritmo de la voz a 1x, para estimar oraciones aún no generadas
+const PRECARGA_SEG = 15;         // el bloque siguiente se precarga cuando al actual le quedan 15 s
+const LATIDO_MS = 2000;          // revisión periódica: app dormida o audio que no avanza
+const DORMIDA_SEG = 10;          // un latido que llega con más de 10 s de atraso: la app estuvo dormida
+const TRABADO_SEG = 6;           // el audio debería sonar pero no avanza hace 6 s
 // Calidad automática: si el equipo genera más lento de lo que suena y ya casi no queda audio
 // por delante, la calidad baja un nivel (Alta → Media → Rápida), solo por esta sesión.
 // En el iPhone se genera a 2–3,6x, así que ahí no se activa; en un PC lento (0,3x) sí.
@@ -75,12 +85,18 @@ function recortar(pcm, sr) {
 export class Reproductor extends EventTarget {
   constructor(audio) {
     super();
-    this.audio = audio;
+    this.audio = audio;         // el <audio> que suena (o sonará); se turna con `otro`
+    this.otro = new Audio();    // precarga el bloque siguiente
+    this.otro.preload = 'auto';
+    this.desbloqueados = new WeakSet(); // <audio> que ya sonaron una vez (iOS pide un toque la primera vez)
+    this.dobleAudio = true;     // se apaga si el teléfono no deja usar el segundo <audio>
+    this.preparado = null;      // bloque siguiente ya cargado en `otro`
+    this.retiro = null;         // retira el <audio> anterior apenas suena el nuevo (ver #retirarCuandoSuene)
     this.doc = null;
     this.contenido = null;
     this.ajustes = null;
     this.actual = 0;            // oración que suena (o sonará al dar play)
-    this.bloque = null;         // bloque cargado en el <audio>: { ini, fin, url, offsets, dur }
+    this.bloque = null;         // bloque cargado en `audio`: { ini, fin, url, offsets, dur, anticipo }
     this.sonando = false;       // lo que quiere el usuario
     this.generando = false;
     this.epoca = 0;             // cambia cuando cambia la voz: invalida lo generado
@@ -99,27 +115,37 @@ export class Reproductor extends EventTarget {
     this.espera = null;         // { tipo: 'arranque' | 'corte' | 'salto' | 'ajuste' | 'reintento', t }
     this.metrica = { n: 0, audio: 0, gen: 0, backend: '' };
 
-    audio.addEventListener('ended', () => this.#alTerminar());
-    audio.addEventListener('timeupdate', () => this.#seguirPosicion());
-    audio.addEventListener('seeked', () => this.#seguirPosicion());
-    audio.addEventListener('pause', () => {
-      // Pausa del sistema (llamada, otra app, controles de la pantalla bloqueada).
-      // Las pausas que provoca el propio reproductor al cambiar de audio se ignoran.
-      if (audio.ended || !this.sonando || performance.now() < this.ignorarPausaHasta) return;
-      this.sonando = false;
-      anotar('pausa', { motivo: 'sistema', oracion: this.actual }, { urgente: true });
-      this.#estado('pausa');
-      this.guardarYa();
-    });
-    audio.addEventListener('play', () => {
-      if (!this.sonando && this.bloque) {
-        this.sonando = true;
-        anotar('play', { motivo: 'sistema', oracion: this.actual });
-        this.#estado('sonando');
-        this.#llenar();
-      }
-    });
+    // Los eventos solo cuentan para el <audio> que suena; el otro solo precarga.
+    for (const el of [audio, this.otro]) {
+      el.addEventListener('playing', () => this.desbloqueados.add(el));
+      el.addEventListener('ended', () => { if (el === this.audio) this.#alTerminar(); });
+      el.addEventListener('timeupdate', () => { if (el === this.audio) this.#seguirPosicion(); });
+      el.addEventListener('seeked', () => { if (el === this.audio) this.#seguirPosicion(); });
+      el.addEventListener('pause', () => {
+        // Pausa del sistema (llamada, otra app, Siri).
+        // Las pausas que provoca el propio reproductor al cambiar de audio se ignoran.
+        if (el !== this.audio || el.ended || !this.sonando || performance.now() < this.ignorarPausaHasta) return;
+        this.sonando = false;
+        this.retiro?.();
+        anotar('pausa', { motivo: 'sistema', oracion: this.actual }, { urgente: true });
+        this.#estado('pausa');
+        this.guardarYa();
+      });
+      el.addEventListener('play', () => {
+        if (el === this.audio && !this.sonando && this.bloque) {
+          this.sonando = true;
+          anotar('play', { motivo: 'sistema', oracion: this.actual });
+          this.#estado('sonando');
+          this.#llenar();
+        }
+      });
+    }
     document.addEventListener('visibilitychange', () => { if (document.hidden) this.guardarYa(); });
+
+    this.ultimoLatido = Date.now();
+    this.sonabaEnLatido = false;
+    this.avance = null;
+    setInterval(() => this.#latido(), LATIDO_MS);
 
     // Cada minuto, una línea en el registro: cuánto se generó, con qué y cuánto queda por delante.
     setInterval(() => {
@@ -181,40 +207,44 @@ export class Reproductor extends EventTarget {
     if (this.sonando) return;
     this.#cambiarFuente(this.silencio, null);
     this.audio.play().catch(() => { /* basta con el intento dentro del toque */ });
+    this.#desbloquearOtro();
   }
 
   // Debe llamarse dentro de un toque y sin esperas antes del primer play():
   // iOS solo deja reproducir audio si ocurre en el mismo instante del toque.
-  play() {
+  // `motivo`: 'tú' (botones de la app) o 'controles' (pantalla bloqueada, auto, audífonos).
+  play(motivo = 'tú') {
     if (!this.doc) return;
     if (this.bloque && this.bloque.fin >= this.total - 1 && this.audio.ended) {
       this.#soltarBloque();
       this.actual = 0;
     }
     this.sonando = true;
-    anotar('play', { motivo: 'tú', oracion: this.actual });
+    anotar('play', { motivo, oracion: this.actual });
     if (this.#bloqueCubre(this.actual) && !this.audio.ended) {
       this.audio.play().catch((e) => this.#falloAlSonar(e));
+      this.#desbloquearOtro();
       this.#estado('sonando');
       this.#llenar();
       return;
     }
-    // Desbloquea el audio con un silencio mientras se genera la primera oración.
+    // Desbloquea el audio con un silencio (en bucle) mientras se genera la primera oración.
     this.espera = { tipo: 'arranque', t: Date.now() };
-    this.#cambiarFuente(this.silencio, null);
-    this.audio.play().catch(() => { /* se reintenta con el primer bloque */ });
+    this.#esperarEnSilencio();
+    this.#desbloquearOtro();
     if (this.listos.has(this.actual)) this.#sonarDesde(this.actual);
     else this.#estado(this.#motorListo() ? 'generando' : 'cargando-voz');
     this.#llenar();
   }
 
-  pausar() {
+  pausar(motivo = 'tú') {
     if (!this.sonando) return;
     this.sonando = false;
     this.espera = null;
-    anotar('pausa', { motivo: 'tú', oracion: this.actual });
+    anotar('pausa', { motivo, oracion: this.actual });
     this.#silenciarPausa();
     this.audio.pause();
+    this.retiro?.();
     this.#estado('pausa');
     this.guardarYa();
   }
@@ -248,9 +278,8 @@ export class Reproductor extends EventTarget {
       if (this.listos.has(i)) this.#sonarDesde(i);
       else {
         this.espera = { tipo: 'salto', t: Date.now() };
-        this.#silenciarPausa();
-        this.audio.pause();
         this.#soltarBloque();
+        this.#esperarEnSilencio();
         this.#estado('generando');
         this.#emitir('oracion', i);
         this.#llenar();
@@ -306,8 +335,10 @@ export class Reproductor extends EventTarget {
 
   cambiarVelocidad(v) {
     this.velocidad = v;
-    this.audio.defaultPlaybackRate = v;
-    this.audio.playbackRate = v;
+    for (const el of [this.audio, this.otro]) {
+      el.defaultPlaybackRate = v;
+      el.playbackRate = v;
+    }
   }
 
   // Cambió la voz, la calidad o el idioma: lo generado ya no sirve.
@@ -325,9 +356,8 @@ export class Reproductor extends EventTarget {
     this.listos.clear();
     if (this.sonando) {
       this.espera = { tipo: 'ajuste', t: Date.now() };
-      this.#silenciarPausa();
-      this.audio.pause();
       this.#soltarBloque();
+      this.#esperarEnSilencio();
       this.#estado(this.#motorListo() ? 'generando' : 'cargando-voz');
       this.#llenar();
     } else {
@@ -408,11 +438,14 @@ export class Reproductor extends EventTarget {
     this.#silenciarPausa();
     const anterior = this.bloque;
     this.bloque = bloque;
+    this.audio.loop = false;
     this.audio.src = url;
     if (anterior && anterior.url !== url) URL.revokeObjectURL(anterior.url);
   }
 
+  // Suelta el bloque que suena y el que estaba precargado como su continuación.
   #soltarBloque() {
+    this.#soltarPreparado();
     if (!this.bloque) return;
     const url = this.bloque.url;
     this.bloque = null;
@@ -422,6 +455,190 @@ export class Reproductor extends EventTarget {
       this.audio.load();
     }
     URL.revokeObjectURL(url);
+  }
+
+  // ---------- sin momentos sin audio (ver el comentario del comienzo) ----------
+
+  // Mientras se espera la voz suena un silencio en bucle: así iOS no duerme la app y la voz
+  // se sigue generando con la pantalla bloqueada.
+  #esperarEnSilencio() {
+    this.#soltarPreparado();
+    this.#cambiarFuente(this.silencio, null);
+    this.audio.loop = true;
+    this.audio.play().catch(() => { /* se reintenta con el primer bloque */ });
+  }
+
+  #enSilencio() {
+    return !this.bloque && this.audio.loop && !this.audio.paused;
+  }
+
+  #otroListo() {
+    return this.dobleAudio && this.desbloqueados.has(this.otro);
+  }
+
+  // iOS deja usar un <audio> sin un toque solo si ya sonó una vez con un toque: dentro del
+  // toque de play se hace sonar medio segundo de silencio en el segundo <audio>.
+  #desbloquearOtro() {
+    const el = this.otro;
+    if (!this.dobleAudio || this.desbloqueados.has(el) || this.preparado || this.retiro) return;
+    el.loop = false;
+    el.src = this.silencio;
+    el.play().catch(() => { /* sin segundo audio: se sigue con uno solo */ });
+  }
+
+  #soltarPreparado() {
+    const p = this.preparado;
+    if (!p) return;
+    this.preparado = null;
+    if (this.otro.src === p.url) {
+      this.otro.removeAttribute('src');
+      this.otro.load();
+    }
+    URL.revokeObjectURL(p.url);
+  }
+
+  // Cuando al bloque que suena le quedan menos de PRECARGA_SEG, el siguiente se arma y se
+  // carga en el otro <audio>, listo para sonar apenas termine este.
+  #prepararSiguiente() {
+    const b = this.bloque;
+    if (this.preparado || this.retiro || !this.sonando || !b || !this.#otroListo()) return;
+    if (this.audio.src !== b.url || b.dur - this.audio.currentTime > PRECARGA_SEG) return;
+    const sig = b.fin + 1;
+    if (sig >= this.total || !this.listos.has(sig)) return;
+    const p = this.#armarBloque(sig);
+    if (!p) return;
+    this.preparado = p;
+    this.otro.loop = false;
+    this.otro.src = p.url;
+    this.otro.defaultPlaybackRate = this.velocidad;
+    this.otro.playbackRate = this.velocidad;
+    this.otro.load();
+  }
+
+  // Pasa al bloque precargado sin espera: en la pausa final del bloque que suena (ver
+  // `anticipo`) o, si no alcanzó, cuando termina.
+  #pasarAlPreparado() {
+    const p = this.preparado;
+    const b = this.bloque;
+    if (!p || !b || p.ini !== b.fin + 1 || this.retiro) return false;
+    this.preparado = null;
+    const viejo = this.audio;
+    const nuevo = this.otro;
+    this.audio = nuevo;
+    this.otro = viejo;
+    this.bloque = p;
+    nuevo.defaultPlaybackRate = this.velocidad;
+    nuevo.playbackRate = this.velocidad;
+    nuevo.play().catch((e) => this.#falloAlPasar(e, p));
+    this.#retirarCuandoSuene(viejo, nuevo, () => URL.revokeObjectURL(b.url));
+    this.actual = p.ini;
+    this.cambioPosicion = Date.now();
+    this.#emitir('oracion', p.ini);
+    this.#guardarPronto();
+    anotar('bloque', { desde: p.ini, hasta: p.fin, seg: Math.round(p.dur), pre: 1 });
+    this.#estado('sonando');
+    this.#mediaSession();
+    this.#podar();
+    this.#llenar();
+    return true;
+  }
+
+  // Suena el silencio de espera y ya está la voz: el bloque se carga en el otro <audio> y el
+  // silencio se apaga recién cuando el bloque suena.
+  #entrarSobreSilencio(b) {
+    const silencio = this.audio;
+    const nuevo = this.otro;
+    this.audio = nuevo;
+    this.otro = silencio;
+    this.bloque = b;
+    nuevo.loop = false;
+    nuevo.src = b.url;
+    nuevo.defaultPlaybackRate = this.velocidad;
+    nuevo.playbackRate = this.velocidad;
+    nuevo.play().catch((e) => { this.retiro?.(); this.#falloAlPasar(e, b); });
+    this.#retirarCuandoSuene(silencio, nuevo);
+  }
+
+  // El <audio> anterior (ahora `otro`) se apaga cuando el nuevo ya suena; mientras tanto sigue
+  // con lo que le quedaba (su pausa final o el silencio de espera). Con el bloque precargado
+  // es inmediato.
+  #retirarCuandoSuene(viejo, nuevo, alRetirar) {
+    let hecho = false;
+    const retirar = () => {
+      if (hecho) return;
+      hecho = true;
+      if (this.retiro === retirar) this.retiro = null;
+      if (this.otro === viejo) {
+        viejo.pause();
+        viejo.loop = false;
+        viejo.removeAttribute('src');
+        viejo.load();
+      }
+      alRetirar?.();
+    };
+    this.retiro = retirar;
+    if (nuevo.readyState >= 3) {
+      retirar();
+      return;
+    }
+    nuevo.addEventListener('playing', retirar, { once: true });
+    setTimeout(retirar, 4000); // por si el nuevo nunca llega a sonar
+  }
+
+  // El teléfono no dejó usar el segundo <audio> sin un toque: se sigue con uno solo (como
+  // antes de esta versión) y el bloque suena en el <audio> de siempre.
+  #falloAlPasar(e, b) {
+    if (e?.name !== 'NotAllowedError' || !this.dobleAudio) {
+      this.#falloAlSonar(e);
+      return;
+    }
+    this.dobleAudio = false;
+    anotar('audio-doble-falla', { msg: String(e?.message || e).slice(0, 80) }, { urgente: true });
+    if (this.bloque !== b) return;
+    this.retiro?.();
+    const fallido = this.audio;
+    this.audio = this.otro;
+    this.otro = fallido;
+    fallido.removeAttribute('src');
+    fallido.load();
+    this.#cambiarFuente(b.url, b);
+    this.audio.defaultPlaybackRate = this.velocidad;
+    this.audio.playbackRate = this.velocidad;
+    if (this.sonando) this.audio.play().catch((e2) => this.#falloAlSonar(e2));
+  }
+
+  // Cada LATIDO_MS: si la app estuvo dormida con el audio puesto, o el audio debería sonar y
+  // no avanza, queda en el registro (antes esos silencios no se veían). Si el audio quedó
+  // detenido sin aviso, se intenta seguir.
+  #latido() {
+    const ahora = Date.now();
+    const hueco = ahora - this.ultimoLatido;
+    const sonaba = this.sonabaEnLatido; // dormir en pausa es normal: solo cuenta si sonaba
+    this.ultimoLatido = ahora;
+    this.sonabaEnLatido = this.sonando;
+    if (!this.sonando) { this.avance = null; return; }
+    if (sonaba && hueco > DORMIDA_SEG * 1000) {
+      anotar('dormida', {
+        seg: Math.round(hueco / 1000),
+        oracion: this.actual,
+        audio: this.audio.paused ? 'detenido' : 'sonando',
+      }, { urgente: true });
+    }
+    const b = this.bloque;
+    if (!b || this.audio.src !== b.url || this.espera || this.audio.ended) { this.avance = null; return; }
+    const t = this.audio.currentTime;
+    if (!this.avance || this.avance.url !== b.url || Math.abs(t - this.avance.t) > 0.05) {
+      this.avance = { url: b.url, t, desde: ahora, avisado: false };
+      return;
+    }
+    if (this.avance.avisado || ahora - this.avance.desde < TRABADO_SEG * 1000) return;
+    this.avance.avisado = true;
+    anotar('audio-trabado', {
+      oracion: this.actual,
+      pausado: this.audio.paused ? 1 : 0,
+      listo: this.audio.readyState,
+    }, { urgente: true });
+    this.audio.play().catch(() => { /* queda anotado */ });
   }
 
   #guardarPronto() {
@@ -480,6 +697,7 @@ export class Reproductor extends EventTarget {
     this.espera = { tipo: 'reintento', t: Date.now() };
     if (this.listos.has(this.actual)) this.#sonarDesde(this.actual);
     else {
+      this.#esperarEnSilencio();
       this.#estado('generando');
       this.#llenar();
     }
@@ -502,7 +720,10 @@ export class Reproductor extends EventTarget {
       if ((t >= BLOQUE_MIN_SEG && cierra) || t >= BLOQUE_MAX_SEG) break;
     }
     if (!partes.length) return null;
-    const pausas = partes.map((c, k) => (k === partes.length - 1 ? Math.min(c.pausa, PAUSA_FIN_BLOQUE) : c.pausa));
+    // Con dos <audio> el cambio de bloque no agrega pausa: la última oración lleva la suya.
+    // Con uno solo, el cambio de archivo ya agrega una pausa propia.
+    const conPrecarga = this.#otroListo();
+    const pausas = partes.map((c, k) => (k === partes.length - 1 && !conPrecarga ? Math.min(c.pausa, PAUSA_FIN_BLOQUE) : c.pausa));
     const total = partes.reduce((n, c, k) => n + c.pcm.length + Math.round(pausas[k] * this.sr), 0);
     const datos = new Int16Array(total); // los ceros son las pausas
     let off = 0;
@@ -511,7 +732,10 @@ export class Reproductor extends EventTarget {
       off += c.pcm.length + Math.round(pausas[k] * this.sr);
     });
     const dur = t - partes.at(-1).pausa + pausas.at(-1);
-    return { ini, fin: i - 1, url: URL.createObjectURL(wav(datos, this.sr)), offsets, dur };
+    // `anticipo`: segundos finales que son solo pausa; ahí se puede pasar al bloque siguiente
+    // sin cortar la voz.
+    const anticipo = conPrecarga ? Math.max(0, pausas.at(-1) - 0.1) : 0;
+    return { ini, fin: i - 1, url: URL.createObjectURL(wav(datos, this.sr)), offsets, dur, anticipo };
   }
 
   // Empieza a sonar un bloque nuevo desde la oración `i` (que ya está generada).
@@ -527,22 +751,33 @@ export class Reproductor extends EventTarget {
       anotar(this.espera.tipo === 'corte' ? 'corte-fin' : this.espera.tipo, { oracion: i, seg }, { urgente: this.espera.tipo === 'corte' });
       this.espera = null;
     }
-    anotar('bloque', { desde: b.ini, hasta: b.fin, seg: Math.round(b.dur) });
-    this.#cambiarFuente(b.url, b);
-    this.audio.defaultPlaybackRate = this.velocidad;
-    this.audio.playbackRate = this.velocidad;
-    this.audio.play().catch((e) => this.#falloAlSonar(e));
+    // Si suena el silencio de espera, el bloque entra por el otro <audio> sin dejar un hueco.
+    // Si no (un salto con la voz ya lista), se cambia en el mismo <audio>, como siempre.
+    const sobreSilencio = this.#enSilencio() && this.#otroListo();
+    this.#soltarPreparado();
+    anotar('bloque', { desde: b.ini, hasta: b.fin, seg: Math.round(b.dur), ...(sobreSilencio ? { pre: 1 } : {}) });
+    if (sobreSilencio) this.#entrarSobreSilencio(b);
+    else {
+      this.retiro?.();
+      this.#cambiarFuente(b.url, b);
+      this.audio.defaultPlaybackRate = this.velocidad;
+      this.audio.playbackRate = this.velocidad;
+      this.audio.play().catch((e) => this.#falloAlSonar(e));
+    }
     this.#estado('sonando');
     this.#mediaSession();
     this.#podar();
     this.#llenar();
   }
 
-  // Qué oración está sonando según el segundo exacto del bloque.
+  // Qué oración está sonando según el segundo exacto del bloque. También precarga el bloque
+  // siguiente y, en la pausa final, pasa a él.
   #seguirPosicion() {
     const b = this.bloque;
     if (!b || this.audio.src !== b.url) return;
     const t = this.audio.currentTime;
+    if (this.preparado && this.sonando && !this.audio.paused && b.dur - t <= b.anticipo && this.#pasarAlPreparado()) return;
+    this.#prepararSiguiente();
     let k = b.offsets.length - 1;
     while (k > 0 && b.offsets[k] > t + 0.05) k--;
     const i = b.ini + k;
@@ -572,14 +807,17 @@ export class Reproductor extends EventTarget {
       this.guardarYa();
       return;
     }
+    if (this.#pasarAlPreparado()) return;
     if (this.listos.has(sig)) {
       this.#sonarDesde(sig);
       return;
     }
-    // Un corte: terminó el bloque y la oración siguiente aún no está generada.
+    // Un corte: terminó el bloque y la oración siguiente aún no está generada. Se espera con
+    // el silencio en bucle para que la app no se duerma.
     this.espera = { tipo: 'corte', t: Date.now() };
     anotar('corte-inicio', { oracion: sig, backend: this.respaldoCpu ? 'wasm' : this.metrica.backend || '' }, { urgente: true });
     this.#soltarBloque();
+    this.#esperarEnSilencio();
     this.actual = sig;
     this.#emitir('oracion', sig);
     this.#estado('generando');
@@ -698,6 +936,7 @@ export class Reproductor extends EventTarget {
         this.#medirRitmo(motor, pasos, this.listos.get(i).seg, gen);
         // Si se estaba esperando esta oración (al partir, tras un salto o un corte), suena ya.
         if (this.sonando && i === this.actual && !this.#bloqueCubre(i)) this.#sonarDesde(i);
+        else this.#prepararSiguiente(); // con la app oculta, timeupdate puede no llegar
       }
     } catch (e) {
       this.#fallo(e, 'ciclo');
@@ -731,8 +970,9 @@ export class Reproductor extends EventTarget {
     if (this.manejadores) return;
     this.manejadores = true;
     const poner = (accion, fn) => { try { ms.setActionHandler(accion, fn); } catch { /* no soportado */ } };
-    poner('play', () => this.play());
-    poner('pause', () => this.pausar());
+    // 'controles': pantalla bloqueada, auto o audífonos (así el registro distingue esas pausas).
+    poner('play', () => this.play('controles'));
+    poner('pause', () => this.pausar('controles'));
     // Sin "pista anterior/siguiente": así la pantalla bloqueada muestra los botones de
     // retroceder y adelantar 15 s, como en los podcasts.
     poner('previoustrack', null);

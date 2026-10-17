@@ -1,8 +1,8 @@
 import { listarDocs, leerDoc, leerContenido, guardarDocumento, actualizarDoc, borrarDocumento } from './db.js?v=1';
 import { importarArchivo, importarTextoPegado } from './importar.js?v=1';
-import { Reproductor } from './lectura.js?v=9';
+import { Reproductor } from './lectura.js?v=10';
 import { ajustesVoz, guardarAjustesVoz, cargarMotor, estaDescargado, borrarVoces, caidaAnterior, modulo, ES_MOVIL, MODELO_RECOMENDADO, tipoEquipo, revisarGrafica } from './voz.js?v=6';
-import { anotar, textoRegistro, borrarRegistro, cantidadEventos } from './registro.js?v=3';
+import { anotar, textoRegistro, borrarRegistro, cantidadEventos } from './registro.js?v=4';
 import {
   sincronizar, configuracion, guardarConfiguracion, desconectar, probarConexion, ultimaSync,
   registrarBorrado, quitarBorrado, REPO_POR_DEFECTO, URL_CREAR_CLAVE,
@@ -888,7 +888,7 @@ async function iniciar() {
   await revisarGrafica();
   ajustes = await ajustesVoz();
   anotar('inicio-app', {
-    version: 11,
+    version: 12,
     equipo: tipoEquipo(),
     modo: matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'icono' : 'pestaña',
     modelo: ajustes.modelo,

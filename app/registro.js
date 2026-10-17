@@ -96,7 +96,17 @@ function resumirSesion(evs) {
       ? `no alcanza ni con ${e.pasos} pasos (${coma(e.ritmo)}x)`
       : `${e.de}→${e.a} pasos (generaba a ${coma(e.ritmo)}x)`)).join(' · ')}`);
   }
-  L.push(`- Pausas del sistema (llamadas, Siri, otra app): ${pausasSistema} · errores: ${errores.length}`);
+  // Silencios que antes no se veían: la app dormida con el audio puesto o el audio sin avanzar.
+  const dormidas = evs.filter((e) => e.tipo === 'dormida');
+  const segDormida = dormidas.reduce((n, e) => n + (e.seg || 0), 0);
+  const maxDormida = dormidas.reduce((m, e) => Math.max(m, e.seg || 0), 0);
+  const trabados = evs.filter((e) => e.tipo === 'audio-trabado').length;
+  L.push(`- Silencios con la app dormida: ${dormidas.length}${dormidas.length ? ` · ${dur(segDormida)} en total, el más largo ${dur(maxDormida)}` : ''} · audio trabado: ${trabados}`);
+  const bloques = evs.filter((e) => e.tipo === 'bloque');
+  const sinSegundo = evs.some((e) => e.tipo === 'audio-doble-falla') ? ' · el teléfono no dejó usar el segundo audio' : '';
+  L.push(`- Cambios de bloque: ${bloques.length} (${bloques.filter((e) => e.pre).length} sin espera)${sinSegundo}`);
+  const pausasControles = evs.filter((e) => e.tipo === 'pausa' && e.motivo === 'controles').length;
+  L.push(`- Pausas: desde la pantalla bloqueada o el auto ${pausasControles} · del sistema (llamadas, Siri, otra app) ${pausasSistema} · errores: ${errores.length}`);
   return L;
 }
 
